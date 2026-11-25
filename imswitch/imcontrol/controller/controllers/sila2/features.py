@@ -1,0 +1,613 @@
+"""SiLA 2 features of ImSwitch, served by SiLa2Manager (UniteLabs CDK).
+
+Every handler runs its ImSwitch call in a worker thread (``asyncio.to_thread``), so a long move
+or exposure does not stall the SiLA server. Handlers go through the ImSwitch controllers (the
+same code paths as the HTTP API), so stage travel limits and the "something else is running"
+refusals apply to SiLA clients too. Positions are µm in the ImSwitch user frame.
+
+A refusal the client can act on is a defined execution error (StageLimitReached,
+InstrumentBusy, UnknownDevice, NotAvailable, PlateNotCalibrated).
+"""
+
+import asyncio
+import dataclasses
+import io
+import json
+import os
+import time
+import typing
+from datetime import datetime
+
+import numpy as np
+from fastapi import HTTPException
+from unitelabs.cdk import sila
+
+MICROMETER = sila.constraints.Unit(
+    label="µm", components=[sila.constraints.UnitComponent(unit="Meter")], factor=1e-6)
+MILLISECOND = sila.constraints.Unit(
+    label="ms", components=[sila.constraints.UnitComponent(unit="Second")], factor=1e-3)
+Micrometer = typing.Annotated[float, MICROMETER]
+Millisecond = typing.Annotated[float, MILLISECOND, sila.constraints.MinimalExclusive(0.0)]
+JpegImage = typing.Annotated[bytes, sila.constraints.ContentType("image", "jpeg")]
+
+
+# --- errors -----------------------------------------------------------------------------------
+
+class StageLimitReached(Exception):
+    """The target lies outside the stage travel limits of this microscope."""
+
+
+class InstrumentBusy(Exception):
+    """Another acquisition, job or calibration drives the microscope."""
+
+
+class UnknownDevice(Exception):
+    """No detector, illumination source, labware or well of that name."""
+
+
+class NotAvailable(Exception):
+    """The loaded setup has no hardware or controller for this command."""
+
+
+class PlateNotCalibrated(Exception):
+    """The plate position is unknown. Centre the stage over a well and call SetPlateOrigin."""
+
+
+async def _call(fn, *args, conflict=InstrumentBusy, **kwargs):
+    """Run a blocking ImSwitch call in a thread; map HTTP refusals onto defined errors."""
+    try:
+        return await asyncio.to_thread(fn, *args, **kwargs)
+    except HTTPException as e:
+        if e.status_code == 409:
+            raise conflict(str(e.detail)) from None
+        if e.status_code == 404:
+            raise UnknownDevice(str(e.detail)) from None
+        if e.status_code == 503:
+            raise NotAvailable(str(e.detail)) from None
+        raise RuntimeError(str(e.detail)) from None
+
+
+def _pick(name: str, names: list, kind: str) -> str:
+    """The named device, or the first one when name is empty."""
+    if not names:
+        raise NotAvailable(f"This setup has no {kind}.")
+    if not name:
+        return names[0]
+    if name not in names:
+        raise UnknownDevice(f"No {kind} '{name}'. Available: {', '.join(names)}.")
+    return name
+
+
+class _ImSwitchFeature(sila.Feature):
+    """Common base: the master controller and controller lookup."""
+
+    def __init__(self, master, originator="org.openuc2", category="microscopy", **kwargs):
+        super().__init__(originator=originator, category=category, version="1.0", **kwargs)
+        self._master = master
+
+    def _controller(self, name: str):
+        controller = self._master.getController(name)
+        if controller is None:
+            raise NotAvailable(f"The {name} controller is not loaded in this setup.")
+        return controller
+
+    def _busy(self) -> list:
+        from imswitch.imcontrol.controller.busy import busy_reasons
+        return busy_reasons(self._master)
+
+    def _refuse_if_busy(self) -> None:
+        reasons = self._busy()
+        if reasons:
+            raise InstrumentBusy(f"Refused: {', '.join(reasons)}.")
+
+    def _all_light_off(self) -> None:
+        lasers = self._master.lasersManager
+        for name in lasers.getAllDeviceNames():
+            lasers[name].setEnabled(False)
+
+    def _position(self) -> "StagePosition":
+        manager = self._master.positionersManager
+        pos = manager[_pick("", manager.getAllDeviceNames(), "positioner")].getPosition()
+        return StagePosition(x=float(pos.get("X", 0.0)), y=float(pos.get("Y", 0.0)),
+                             z=float(pos.get("Z", 0.0)))
+
+    async def _move(self, is_absolute: bool, **axes) -> "StagePosition":
+        positioner = self._controller("Positioner")
+        await _call(positioner.movePositionerXYZ, isAbsolute=is_absolute, isBlocking=True,
+                    conflict=StageLimitReached, **axes)
+        return await asyncio.to_thread(self._position)
+
+
+# --- stage --------------------------------------------------------------------------------------
+
+@dataclasses.dataclass
+class StagePosition(sila.CustomDataType):
+    """
+    Stage position in the ImSwitch user frame.
+
+    Attributes:
+      X: Position along X.
+      Y: Position along Y.
+      Z: Focus position.
+    """
+
+    x: Micrometer
+    y: Micrometer
+    z: Micrometer
+
+
+class StageController(_ImSwitchFeature):
+    """
+    Move the XY stage and the focus (Z) of the microscope.
+
+    Positions are in µm in the ImSwitch user frame (device frame plus stage offset).
+    Moves outside the stage travel limits are refused with Stage Limit Reached.
+    """
+
+    @sila.UnobservableProperty(errors=[NotAvailable])
+    async def get_position(self) -> StagePosition:
+        """The current stage position."""
+        return await asyncio.to_thread(self._position)
+
+    @sila.ObservableProperty(errors=[NotAvailable])
+    async def subscribe_live_position(self) -> sila.Stream[StagePosition]:
+        """The stage position, sent twice per second."""
+        while True:
+            yield await asyncio.to_thread(self._position)
+            await asyncio.sleep(0.5)
+
+    @sila.UnobservableCommand(errors=[StageLimitReached, NotAvailable])
+    async def move_to(self, x: Micrometer, y: Micrometer) -> StagePosition:
+        """
+        Move the stage to an absolute XY position. The focus (Z) stays where it is.
+
+        Args:
+          X: Target X.
+          Y: Target Y.
+
+        Returns:
+          Position: The stage position after the move.
+        """
+        return await self._move(True, x=x, y=y)
+
+    @sila.UnobservableCommand(errors=[StageLimitReached, NotAvailable])
+    async def move_focus_to(self, z: Micrometer) -> StagePosition:
+        """
+        Move the focus (Z) to an absolute position. Driving Z towards the sample can crash the
+        objective into it; prefer Autofocus or small relative moves.
+
+        Args:
+          Z: Target Z.
+
+        Returns:
+          Position: The stage position after the move.
+        """
+        return await self._move(True, z=z)
+
+    @sila.UnobservableCommand(errors=[StageLimitReached, NotAvailable])
+    async def move_by(self, x: Micrometer, y: Micrometer, z: Micrometer) -> StagePosition:
+        """
+        Move the stage by a relative offset. Axes with offset 0 do not move.
+
+        Args:
+          X: Offset along X.
+          Y: Offset along Y.
+          Z: Offset along Z (focus).
+
+        Returns:
+          Position: The stage position after the move.
+        """
+        axes = {k: v for k, v in (("x", x), ("y", y), ("z", z)) if v != 0.0}
+        if not axes:
+            return await asyncio.to_thread(self._position)
+        return await self._move(False, **axes)
+
+    @sila.UnobservableCommand(errors=[NotAvailable])
+    async def move_to_loading_position(self) -> StagePosition:
+        """
+        Move the stage to the sample loading position (setup property sampleLoadingPosition),
+        where a plate is put on or taken off the stage.
+
+        Returns:
+          Position: The stage position after the move.
+        """
+        await _call(self._controller("Positioner").moveToSampleLoadingPosition, is_blocking=True)
+        return await asyncio.to_thread(self._position)
+
+    @sila.ObservableCommand(errors=[NotAvailable, InstrumentBusy])
+    async def home(self) -> StagePosition:
+        """
+        Home the stage: Z first and lifted, then X and Y (collision-safe frame homing).
+        Drives every axis to its end switch.
+
+        Returns:
+          Position: The stage position after homing.
+        """
+        self._refuse_if_busy()
+        result = await _call(self._controller("Positioner").startFrameHoming, isBlocking=True)
+        if isinstance(result, dict) and not result.get("success", True):
+            raise NotAvailable(result.get("error", "Homing is not supported by this stage."))
+        return await asyncio.to_thread(self._position)
+
+    @sila.UnobservableCommand(errors=[NotAvailable])
+    async def stop(self) -> None:
+        """Stop every stage axis immediately."""
+        await _call(self._controller("Positioner").stopAllAxes)
+
+
+# --- imaging -----------------------------------------------------------------------------------
+
+def _to_jpeg(frame: np.ndarray, max_size: int) -> tuple:
+    """Min-max scale a frame to 8 bit and encode it as JPEG; returns (width, height, bytes)."""
+    from PIL import Image
+    data = np.asarray(frame, dtype=np.float32)
+    lo, hi = float(np.min(data)), float(np.max(data))
+    data = ((data - lo) * (255.0 / (hi - lo)) if hi > lo else np.zeros_like(data)).astype(np.uint8)
+    img = Image.fromarray(data)
+    if max_size > 0:
+        img.thumbnail((max_size, max_size))
+    buf = io.BytesIO()
+    img.convert("L" if img.mode not in ("L", "RGB") else img.mode).save(buf, "JPEG", quality=90)
+    return img.size[0], img.size[1], buf.getvalue()
+
+
+def _data_dir(*parts: str) -> str:
+    from imswitch.imcommon.model import dirtools
+    path = os.path.join(dirtools.UserFileDirs.getValidatedDataPath(), *parts)
+    os.makedirs(path, exist_ok=True)
+    return path
+
+
+class ImagingController(_ImSwitchFeature):
+    """
+    Take images, set exposure and illumination, and focus.
+
+    An empty detector name means the first detector of the setup.
+    """
+
+    def _detector(self, name: str) -> str:
+        return _pick(name, self._master.detectorsManager.getAllDeviceNames(), "detector")
+
+    def _frame(self, detector: str) -> np.ndarray:
+        frames = self._controller("Recording").snapNumpy()
+        frame = frames.get(detector)
+        if frame is None:
+            raise NotAvailable(f"No frame from detector '{detector}'.")
+        return frame
+
+    @sila.UnobservableProperty()
+    async def get_detectors(self) -> list[str]:
+        """Names of the detectors (cameras)."""
+        return list(self._master.detectorsManager.getAllDeviceNames())
+
+    @sila.UnobservableProperty()
+    async def get_illumination_sources(self) -> list[str]:
+        """Names of the illumination sources (lasers and LEDs)."""
+        return list(self._master.lasersManager.getAllDeviceNames())
+
+    @sila.UnobservableCommand(errors=[UnknownDevice, NotAvailable])
+    async def snap_image(
+        self, detector: str, max_size: typing.Annotated[int, sila.constraints.MinimalInclusive(0)]
+    ) -> tuple[int, int, JpegImage]:
+        """
+        Take one frame and return it as an 8-bit JPEG preview (min-max scaled). Nothing is saved.
+
+        Args:
+          Detector: Detector name; empty for the first detector.
+          MaxSize: Longest edge of the returned image in pixels; 0 for full size.
+
+        Returns:
+          Width: Width of the returned image in pixels.
+          Height: Height of the returned image in pixels.
+          Image: The frame as JPEG.
+        """
+        name = self._detector(detector)
+        frame = await _call(self._frame, name)
+        return await asyncio.to_thread(_to_jpeg, frame, max_size)
+
+    @sila.UnobservableCommand(errors=[UnknownDevice, NotAvailable])
+    async def save_image(self, detector: str, name: str) -> str:
+        """
+        Take one frame and save it at full bit depth as OME-TIFF in the data folder
+        (subfolder SiLA), with pixel size, stage position and objective.
+
+        Args:
+          Detector: Detector name; empty for the first detector.
+          Name: Name of the image; the file is <timestamp>_<name>.ome.tif.
+
+        Returns:
+          FilePath: Path of the saved file on the microscope.
+        """
+        det = self._detector(detector)
+        frame = await _call(self._frame, det)
+        return await asyncio.to_thread(self._save, det, frame, name or "snap")
+
+    def _save(self, detector: str, frame: np.ndarray, name: str) -> str:
+        from imswitch.imcontrol.model.aufgaben.storage import save_image
+        manager = self._master.detectorsManager[detector]
+        pixel_size = getattr(manager, "pixelSizeUm", [1, 1, 1])
+        stage = self._master.positionersManager
+        pos = stage[stage.getAllDeviceNames()[0]].getPosition() if stage.getAllDeviceNames() else {}
+        stamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+        path = os.path.join(_data_dir("SiLA"), f"{stamp}_{name}.ome.tif")
+        save_image(path, np.asarray(frame), pixel_size_um=float(pixel_size[-1]),
+                   origin_um=(pos.get("X", 0.0), pos.get("Y", 0.0), pos.get("Z")),
+                   name=name, channel_names=[detector])
+        return path
+
+    @sila.UnobservableCommand(errors=[UnknownDevice, NotAvailable])
+    async def set_exposure_time(self, detector: str, exposure_time: Millisecond) -> None:
+        """
+        Set the exposure time of a detector.
+
+        Args:
+          Detector: Detector name; empty for the first detector.
+          ExposureTime: The exposure time.
+        """
+        await _call(self._controller("Settings").setDetectorExposureTime,
+                    detectorName=self._detector(detector), exposureTime=exposure_time)
+
+    @sila.UnobservableCommand(errors=[UnknownDevice, NotAvailable])
+    async def set_illumination(self, source: str, intensity: float, enabled: bool) -> None:
+        """
+        Set the intensity of an illumination source and switch it on or off. The intensity is in
+        the units of the source and must lie in its range (setup valueRangeMin/Max).
+
+        Args:
+          Source: Illumination source name, see IlluminationSources.
+          Intensity: Intensity in the units of the source.
+          Enabled: Switch the source on (true) or off (false).
+        """
+        if not source:
+            raise UnknownDevice("Name the illumination source.")
+        name = _pick(source, self._master.lasersManager.getAllDeviceNames(), "illumination source")
+        laser = self._master.lasersManager[name]
+        lo, hi = laser.valueRangeMin, laser.valueRangeMax
+        if lo is not None and hi is not None and not lo <= intensity <= hi:
+            raise sila.errors.ValidationError(
+                f"Intensity {intensity} outside the range {lo}..{hi} of '{name}'.", "Intensity")
+        laser_controller = self._controller("Laser")
+        await _call(laser_controller.setLaserValue, name, intensity)
+        await _call(laser_controller.setLaserActive, name, enabled)
+
+    @sila.UnobservableCommand()
+    async def switch_off_illumination(self) -> None:
+        """Switch every illumination source off."""
+        await asyncio.to_thread(self._all_light_off)
+
+    @sila.ObservableCommand(errors=[NotAvailable, InstrumentBusy])
+    async def autofocus(
+        self,
+        range_: typing.Annotated[float, MICROMETER, sila.constraints.MinimalExclusive(0.0),
+                                 sila.constraints.MaximalInclusive(1000.0)],
+        step: typing.Annotated[float, MICROMETER, sila.constraints.MinimalExclusive(0.0)],
+        *,
+        status: sila.Status,
+    ) -> Micrometer:
+        """
+        Find the focus: scan Z by plus and minus Range around the current focus in steps of Step,
+        fit the sharpness peak and move there.
+
+        Args:
+          Range: Half the scanned Z range.
+          Step: Z step of the scan.
+
+        Returns:
+          FocusPosition: Z after the autofocus.
+        """
+        af = self._controller("Autofocus")
+        started = await _call(af.autoFocus, rangez=range_, resolutionz=step)
+        if isinstance(started, dict) and started.get("status") == "error":
+            raise InstrumentBusy(started.get("message", "Autofocus refused."))
+        t0, expected = time.monotonic(), max(2.0, 2 * range_ / step * 0.3)
+        while (state := await asyncio.to_thread(af.getAutofocusStatus))["isRunning"]:
+            status.update(progress=min(0.95, (time.monotonic() - t0) / expected))
+            await asyncio.sleep(0.5)
+        if state["state"] not in ("finished", "idle"):
+            raise RuntimeError(f"Autofocus ended in state '{state['state']}'.")
+        return float(state["currentZ"])
+
+
+# --- well plates and experiments ---------------------------------------------------------------
+
+class ExperimentController(_ImSwitchFeature):
+    """
+    Image well plates and run ImSwitch experiments.
+
+    The plate position on the stage is set once with SetPlateOrigin (stage centred over a
+    known well); MoveToWell and ImageWells then address wells by name, e.g. "B3".
+    """
+
+    def __init__(self, master, **kwargs):
+        super().__init__(master, **kwargs)
+        self._labware = ""
+        self._offset = None  # (dx, dy) µm: stage = well + offset
+
+    def _experiment(self):
+        return self._controller("Experiment")
+
+    def _definition(self, load_name: str):
+        manager = getattr(self._experiment(), "labware_manager", None)
+        if manager is None:
+            raise NotAvailable("No labware definitions loaded.")
+        try:
+            return manager.get(load_name)
+        except KeyError:
+            raise UnknownDevice(f"No labware '{load_name}'. See Labware.") from None
+
+    def _wells(self, tokens: list) -> list:
+        """Wells of the plate for tokens like "A1" or ranges like "A1:B3", stage coordinates."""
+        from imswitch.imcontrol.model.labware import WellSelectionPattern, resolve_pattern
+        if self._offset is None:
+            raise PlateNotCalibrated("Call SetPlateOrigin first.")
+        ranges = [t for t in tokens if ":" in t]
+        singles = [t for t in tokens if ":" not in t]
+        pattern = WellSelectionPattern(wells=singles or None, ranges=ranges or None)
+        try:
+            wells = resolve_pattern(self._definition(self._labware), pattern)
+        except ValueError as e:
+            raise UnknownDevice(str(e)) from None
+        dx, dy = self._offset
+        return [(w.id, w.x + dx, w.y + dy) for w in wells]
+
+    @sila.UnobservableProperty(errors=[NotAvailable])
+    async def get_labware(self) -> list[str]:
+        """Load names of the plate definitions the microscope knows."""
+        return [s.get("load_name", "") for s in self._experiment().getLabwareList()]
+
+    @sila.UnobservableCommand(errors=[UnknownDevice, NotAvailable])
+    async def set_plate_origin(self, labware: str, well: str) -> None:
+        """
+        Tell the microscope where the plate sits: the stage is now centred over the given well.
+        Kept until ImSwitch restarts.
+
+        Args:
+          Labware: Load name of the plate, see Labware.
+          Well: The well the stage is centred over, e.g. "A1".
+        """
+        lab = self._definition(labware)
+        w = lab.wells.get(well.strip().upper())
+        if w is None:
+            raise UnknownDevice(f"'{labware}' has no well '{well}'.")
+        pos = await asyncio.to_thread(self._position)
+        self._labware, self._offset = labware, (pos.x - w.x, pos.y - w.y)
+
+    @sila.UnobservableCommand(errors=[UnknownDevice, PlateNotCalibrated, StageLimitReached,
+                                      NotAvailable])
+    async def move_to_well(self, well: str) -> StagePosition:
+        """
+        Centre the stage over a well of the plate set by SetPlateOrigin.
+
+        Args:
+          Well: Well name, e.g. "B3".
+
+        Returns:
+          Position: The stage position after the move.
+        """
+        (_, x, y), = self._wells([well.strip().upper()])
+        return await self._move(True, x=x, y=y)
+
+    @sila.ObservableCommand(errors=[UnknownDevice, PlateNotCalibrated, InstrumentBusy,
+                                    NotAvailable])
+    async def image_wells(
+        self,
+        wells: list[str],
+        illumination: str,
+        intensity: float,
+        exposure_time: Millisecond,
+        autofocus: bool,
+        *,
+        status: sila.Status,
+    ) -> str:
+        """
+        Take one image in the centre of each well, as an ImSwitch experiment (OME-Zarr / OME-TIFF
+        in the data folder). The illumination is switched off afterwards.
+
+        Args:
+          Wells: Wells or ranges, e.g. ["A1", "B2:B4"].
+          Illumination: Illumination source; empty for the first one.
+          Intensity: Intensity in the units of the source.
+          ExposureTime: Exposure time per image.
+          Autofocus: Run the software autofocus at each well.
+
+        Returns:
+          DataPath: Folder with the images on the microscope.
+        """
+        wells_xy = self._wells([w.strip().upper() for w in wells])
+        source = _pick(illumination, self._master.lasersManager.getAllDeviceNames(),
+                       "illumination source")
+        experiment = _well_experiment(wells_xy, source, intensity, exposure_time, autofocus,
+                                      self._labware)
+        ec = self._experiment()
+        await _call(ec.startWellplateExperiment, experiment)
+        try:
+            await self._wait_for_experiment(ec, status)
+        finally:
+            await asyncio.to_thread(self._all_light_off)
+        return getattr(ec, "_last_experiment_dir", "")
+
+    async def _wait_for_experiment(self, ec, status) -> None:
+        t0 = time.monotonic()
+        await asyncio.sleep(0.5)
+        while (await asyncio.to_thread(ec.getExperimentStatus)).get("status") != "idle":
+            status.update(progress=min(0.95, (time.monotonic() - t0) / 600.0))
+            await asyncio.sleep(1.0)
+
+    @sila.UnobservableCommand(errors=[InstrumentBusy, NotAvailable])
+    async def start_experiment(self, experiment: str) -> str:
+        """
+        Start an ImSwitch experiment (the JSON body of startWellplateExperiment, see
+        ExperimentSchema) and return at once. Follow it with ExperimentStatus.
+
+        Args:
+          Experiment: The experiment as JSON.
+
+        Returns:
+          Name: Name of the started experiment.
+        """
+        from imswitch.imcontrol.controller.controllers.experiment_controller import Experiment
+        try:
+            model = Experiment.model_validate_json(experiment)
+        except ValueError as e:
+            raise sila.errors.ValidationError(str(e), "Experiment") from None
+        await _call(self._experiment().startWellplateExperiment, model)
+        return model.name
+
+    @sila.UnobservableProperty(errors=[NotAvailable])
+    async def get_experiment_status(self) -> str:
+        """State of the experiment: idle, running, paused or stopping."""
+        return str((await asyncio.to_thread(self._experiment().getExperimentStatus))
+                   .get("status", "idle"))
+
+    @sila.UnobservableProperty(errors=[NotAvailable])
+    async def get_last_data_path(self) -> str:
+        """Folder of the last experiment on the microscope; empty before the first."""
+        return getattr(self._experiment(), "_last_experiment_dir", "") or ""
+
+    @sila.UnobservableProperty()
+    async def get_experiment_schema(self) -> str:
+        """JSON schema of the experiment that StartExperiment takes."""
+        from imswitch.imcontrol.controller.controllers.experiment_controller import Experiment
+        return json.dumps(Experiment.model_json_schema())
+
+    @sila.UnobservableCommand(errors=[NotAvailable])
+    async def stop_experiment(self) -> None:
+        """Stop the running experiment after the current image."""
+        await _call(self._experiment().stopExperiment)
+
+    @sila.UnobservableCommand(errors=[NotAvailable])
+    async def pause_experiment(self) -> None:
+        """Pause the running experiment."""
+        await _call(self._experiment().pauseWorkflow)
+
+    @sila.UnobservableCommand(errors=[NotAvailable])
+    async def resume_experiment(self) -> None:
+        """Resume a paused experiment."""
+        await _call(self._experiment().resumeExperiment)
+
+
+def _well_experiment(wells_xy, source, intensity, exposure_ms, autofocus, labware):
+    """An Experiment that takes one image at the centre of each well."""
+    from imswitch.imcontrol.controller.controllers.experiment_controller import Experiment
+    return Experiment.model_validate({
+        "name": "SiLA_ImageWells",
+        "parameterValue": {
+            "illumination": [source], "illuIntensities": [intensity],
+            "exposureTimes": [exposure_ms], "timeLapsePeriod": 0, "numberOfImages": 1,
+            "autoFocus": autofocus, "autoFocusMin": -50, "autoFocusMax": 50,
+            "autoFocusStepSize": 5, "zStack": False, "zStackMin": 0, "zStackMax": 0,
+        },
+        "pointList": [
+            {"name": wid, "x": x, "y": y, "wellId": wid, "labwareLoadName": labware}
+            for wid, x, y in wells_xy
+        ],
+    })
+
+
+def create_features(master, handover_position_name: str = "Stage") -> list:
+    """The features SiLa2Controller registers."""
+    return [
+        StageController(master),
+        ImagingController(master),
+        ExperimentController(master),
+    ]

@@ -777,6 +777,30 @@ class SiLA2Info:
     vendorUrl: str = "https://openuc2.com"
     """ Vendor URL reported in SiLA2 service discovery. """
 
+    serverUUID: Optional[str] = None
+    """ SiLA server UUID. None = derived from hostname and setup file, stable across restarts. """
+
+    discovery: bool = True
+    """ Announce the server over mDNS (SiLA discovery), so a workcell finds it by UUID. """
+
+    tls: bool = False
+    """ Serve SiLA over TLS. Needs certificateChain and privateKey. """
+
+    certificateChain: Optional[str] = None
+    """ Path to (or PEM text of) the server certificate chain, for tls. """
+
+    privateKey: Optional[str] = None
+    """ Path to (or PEM text of) the server private key, for tls. """
+
+    cloudEndpoint: Optional[str] = None
+    """ UniteLabs cloud endpoint hostname (no https://). None = local network only. """
+
+    cloudPort: int = 443
+    """ Port of the cloud endpoint (TLS). """
+
+    handoverPositionName: str = "Stage"
+    """ Name of the plate hand-over position (LabwareTransferSiteController). """
+
 
 @dataclass(frozen=False)
 class ArkitektInfo:

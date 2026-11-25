@@ -72,7 +72,7 @@ class ImConMainController(MainController):
                     "ArkitektManager unavailable; skipping ArkitektController."
                 )
                 continue
-            if widgetKey == "SiLA2" and not hasattr(
+            if widgetKey == "SiLa2" and not hasattr(
                 self.__masterController, "sila2Manager"
             ):
                 self.__logger.warning(

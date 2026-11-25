@@ -33,3 +33,23 @@ def test_disabled_without_setup_block():
     assert manager.get_config() == {"enabled": False}
     manager.start_server()  # no-op
     assert not manager.is_running()
+
+
+def test_workcell_lock_http_rule():
+    from imswitch.imcontrol.model import workcell_lock as wl
+    api = "/imswitch/api/PositionerController/"
+    wl.set_lock_state(lambda: "SiLA client lock")
+    try:
+        assert wl.http_refusal(api + "movePositioner")                      # moves: refused
+        assert wl.http_refusal("/imswitch/api/LaserController/setLaserValue")
+        for open_path in (api + "getPositionerPositions", api + "stopAllAxes",
+                          "/imswitch/api/SiLa2Controller/releaseWorkcellLock",
+                          "/imswitch/api/FileManager/upload", "/imswitch/ui/index.html"):
+            assert wl.http_refusal(open_path) == "", open_path
+        token = wl.sila_call.set(True)   # a call made on the workcell's behalf
+        assert wl.http_refusal(api + "movePositioner") == ""
+        wl.sila_call.reset(token)
+        wl.set_lock_state(lambda: "")
+        assert wl.http_refusal(api + "movePositioner") == ""
+    finally:
+        wl.set_lock_state(None)

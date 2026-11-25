@@ -53,7 +53,12 @@ def sila_port(tmp_path_factory):
         pytest.skip("the API test server already runs without SiLA; run this file alone")
     server.start()
     _wait_for_port(port, 60)
-    return port
+    return server, port
+
+
+def _client(port):
+    return Client(ClientConfig(hostname="127.0.0.1", port=port, tls=False,
+                               default_timeout=60_000))
 
 
 def test_every_sila_endpoint(sila_port):
@@ -62,13 +67,36 @@ def test_every_sila_endpoint(sila_port):
     from imswitch.imcontrol.controller.controllers.sila2.check import run_check
 
     async def run():
-        config = ClientConfig(hostname="127.0.0.1", port=sila_port, tls=False,
-                              default_timeout=60_000)
-        async with Client(config) as client:
-            return await run_check(client, motion=True, light=True, intensity=10)
+        async with _client(sila_port[1]) as client:
+            return await run_check(client, motion=True, light=True, teach=True, intensity=10)
 
     check = asyncio.run(run())
     failed = [r for r in check.results if r[1] == "fail"]
     assert not failed, failed
     skipped = {r[0] for r in check.results if r[1] == "skip"}
     assert skipped == {"StageController.Home"}  # end switches: only with --home
+
+
+def test_lock_keeps_the_ui_out(sila_port):
+    """While a SiLA client holds the lock, HTTP may read and stop but not move (423)."""
+    server, port = sila_port
+    api = "/imswitch/api/PositionerController"
+
+    async def locked(fn):
+        async with _client(port) as client:
+            await client.LockController.LockServer(LockIdentifier="test", Timeout=0)
+            try:
+                return await asyncio.to_thread(fn)
+            finally:
+                await client.LockController.UnlockServer(LockIdentifier="test")
+
+    def http_calls():
+        move = server.get(f"{api}/movePositioner", params={"axis": "X", "dist": 1})
+        read = server.get(f"{api}/getPositionerPositions")
+        stop = server.get(f"{api}/stopAllAxes")
+        status = server.get("/imswitch/api/SiLa2Controller/getSiLA2Status").json()
+        return move.status_code, read.status_code, stop.status_code, status["locked"]
+
+    assert asyncio.run(locked(http_calls)) == (423, 200, 200, True)
+    after = server.get(f"{api}/movePositioner", params={"axis": "X", "dist": 0})
+    assert after.status_code == 200

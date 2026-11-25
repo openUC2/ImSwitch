@@ -6,12 +6,14 @@
 Connects like the UniteLabs client tutorial (``sila.client.Client``), reads every property,
 takes one value from every observable property, calls every command of the ImSwitch features
 and checks the defined errors of the refusals. Steps that move the stage need ``--motion``,
-steps that switch light on need ``--light``; ``--home`` adds homing (end switches). Every
-command and property of the ImSwitch features is either run or listed as skipped. Exit code 1
-when a step fails or an element is neither run nor skipped.
+steps that switch light on need ``--light``; ``--home`` adds homing (end switches) and
+``--teach`` the steps that overwrite taught positions in the setup (plate origin, loading
+position). Every command and property of the ImSwitch features and the Lock Controller is
+either run or listed as skipped. Exit code 1 when a step fails or an element is neither run
+nor skipped.
 
-On a real instrument: run without --motion/--light first, and with them only when the stage is
-free and nobody looks into the light path.
+On a real instrument: run without flags first; add --motion/--light only when the stage is
+free and nobody looks into the light path, and --teach only on purpose.
 """
 
 import argparse
@@ -22,8 +24,8 @@ import time
 
 from sila.client import Client, ClientConfig
 
-FEATURES = ("StageController", "ImagingController", "ExperimentController",
-            "LabwareTransferSiteController")
+FEATURES = ("StageController", "ImagingController", "ExperimentController", "JobController",
+            "LabwareTransferSiteController", "LockController")
 # Position Index is a one-field structure; on the wire it is the bare index.
 HANDOVER = {"Position": "Stage", "SubPosition": 1}
 INTERNAL = 1
@@ -32,12 +34,13 @@ INTERNAL = 1
 class Check:
     """Runs steps against one client and records the outcome of each."""
 
-    def __init__(self, client, motion: bool, light: bool, home: bool, intensity: float):
+    def __init__(self, client, allowed: dict, intensity: float, job: str):
         self.client = client
         # feature identifier (e.g. "StageController") -> feature
         self.features = {fid.split("/")[-2]: feat for fid, feat in client.features.items()}
-        self.allowed = {"motion": motion, "light": light, "home": home}
+        self.allowed = allowed  # {"motion", "light", "home", "teach"} -> bool
         self.intensity = intensity
+        self.job = job
         self.results = []  # (element, status, detail)
         self.touched = set()
 
@@ -47,7 +50,8 @@ class Check:
         mark = {"ok": "ok  ", "fail": "FAIL", "skip": "skip"}[status]
         print(f"[{mark}] {element:<55} {detail}"[:160], flush=True)
 
-    async def call(self, feature, command, *, expect_error="", needs=(), timeout=120, **params):
+    async def call(self, feature, command, *, expect_error="", needs=(), timeout=120,
+                   metadata=None, **params):
         """Run one command; returns its responses, or None when skipped or failed."""
         element = f"{feature}.{command}"
         missing = [n for n in needs if not self.allowed[n]]
@@ -56,7 +60,7 @@ class Check:
             return None
         handle = self.features[feature].commands[command]
         try:
-            responses = await self._execute(handle, params, timeout)
+            responses = await self._execute(handle, params, timeout, metadata)
         except Exception as e:  # a defined error is the expected outcome of some steps
             name = getattr(e, "identifier", "") or type(e).__name__
             ok = bool(expect_error) and name == expect_error
@@ -68,10 +72,10 @@ class Check:
         self.record(element, "ok", _short(responses))
         return responses
 
-    async def _execute(self, handle, params, timeout):
+    async def _execute(self, handle, params, timeout, metadata):
         if type(handle).__name__ != "ObservableCommand":
-            return await handle.execute(parameters=params)
-        execution = await handle.execute(parameters=params)
+            return await handle.execute(parameters=params, metadata=metadata)
+        execution = await handle.execute(parameters=params, metadata=metadata)
         deadline = time.monotonic() + timeout
         while not execution.done:
             if time.monotonic() > deadline:
@@ -118,6 +122,9 @@ async def _imaging(c: Check):
                  needs=("light",))
     await c.call(f, "SwitchOffIllumination")
     await c.call(f, "Autofocus", Range=20.0, Step=5.0, needs=("motion", "light"))
+    current = await c.features[f].properties["CurrentObjective"].read()
+    await c.call(f, "MoveToObjective", Slot=current, needs=("motion",))  # stays in place
+    await c.call(f, "MoveToObjective", Slot=99, expect_error="UnknownDevice")
     return source
 
 
@@ -134,24 +141,64 @@ async def _stage(c: Check):
         c.record(f"{f}.MoveTo", "skip", "needs --motion")
         c.record(f"{f}.MoveFocusTo", "skip", "needs --motion")
     await c.call(f, "Stop")
+    await c.call(f, "TeachLoadingPosition", needs=("teach",))
     await c.call(f, "MoveToLoadingPosition", needs=("motion",))
     await c.call(f, "Home", needs=("motion", "home"), timeout=300)
 
 
 async def _plate(c: Check, source: str):
     f = "ExperimentController"
-    labware = await c.features[f].properties["Labware"].read()
-    plate = next((n for n in labware if "96" in n), labware[0] if labware else "")
-    await c.call(f, "SetPlateOrigin", Labware=plate, Well="Z99", expect_error="UnknownDevice")
-    await c.call(f, "SetPlateOrigin", Labware=plate, Well="A1")
-    await c.call(f, "MoveToWell", Well="A2", needs=("motion",))
-    await c.call(f, "MoveToWell", Well="A1", needs=("motion",))
-    await c.call(f, "ImageWells", Wells=["A1", "A2"], Illumination=source,
-                 Intensity=c.intensity, ExposureTime=20.0, Autofocus=False,
-                 needs=("motion", "light"), timeout=600)
     await c.call(f, "StartExperiment", Experiment="{}", expect_error="ValidationError")
     for command in ("PauseExperiment", "ResumeExperiment", "StopExperiment"):
         await c.call(f, command)
+    props = c.features[f].properties
+    labware = await props["Labware"].read()
+    plate = next((n for n in labware if "96" in n), labware[0] if labware else "")
+    await c.call(f, "SetPlateOrigin", Labware=plate, Well="Z99", expect_error="UnknownDevice")
+    await c.call(f, "SetPlateOrigin", Labware=plate, Well="A1", needs=("teach",))
+    calibrated = await props["CalibratedLabware"].read()
+    other = next((n for n in labware if n not in calibrated), "")
+    if other:  # refused before anything moves
+        await c.call(f, "MoveToWell", Labware=other, Well="A1", expect_error="PlateNotCalibrated")
+    if plate not in calibrated:
+        plate = calibrated[0] if calibrated else ""
+    if not plate:
+        for command in ("MoveToWell", "ImageWells"):
+            c.record(f"{f}.{command}", "skip", "no taught plate origin (--teach teaches one)")
+        return
+    await c.call(f, "MoveToWell", Labware=plate, Well="A2", needs=("motion",))
+    await c.call(f, "MoveToWell", Labware=plate, Well="A1", needs=("motion",))
+    await c.call(f, "ImageWells", Labware=plate, Wells=["A1", "A2"], Illumination=source,
+                 Intensity=c.intensity, ExposureTime=20.0, Autofocus=False,
+                 needs=("motion", "light"), timeout=600)
+
+
+async def _jobs(c: Check):
+    f = "JobController"
+    jobs = await c.features[f].properties["Jobs"].read()
+    await c.call(f, "RunJob", Name="no-such-job", Parameters="", Confirmed=False,
+                 expect_error="UnknownDevice")
+    if c.job in jobs:
+        await c.call(f, "RunJob", Name=c.job, Parameters="", Confirmed=False,
+                     needs=("motion", "light"), timeout=600)
+    else:
+        c.record(f"{f}.RunJob", "skip", f"no job '{c.job}' on the microscope (--job NAME)")
+    await c.call(f, "AbortJob")
+
+
+async def _lock(c: Check):
+    f = "LockController"
+    lock = await c.client.LockController.LockIdentifier.from_native(c.client, "silacheck")
+    await c.call(f, "LockServer", LockIdentifier="silacheck", Timeout=60)
+    await c.call(f, "LockServer", LockIdentifier="other", Timeout=60,
+                 expect_error="ServerAlreadyLocked")
+    await c.call("StageController", "Stop", metadata=[lock])  # the holder goes on working
+    await c.call(f, "UnlockServer", LockIdentifier="wrong", expect_error="InvalidLockIdentifier")
+    await c.call(f, "UnlockServer", LockIdentifier="silacheck")
+    await c.call(f, "UnlockServer", LockIdentifier="silacheck", expect_error="ServerNotLocked")
+    await c.call(f, "LockServer", LockIdentifier="forever", Timeout=0)  # 0 s = no timeout
+    await asyncio.sleep(1.0)
+    await c.call(f, "UnlockServer", LockIdentifier="forever")  # fails if it had expired
 
 
 async def _handover(c: Check):
@@ -188,9 +235,11 @@ async def _service(c: Check) -> str:
     return info["ServerUUID"]
 
 
-async def run_check(client, motion=False, light=False, home=False, intensity=0.0) -> Check:
+async def run_check(client, motion=False, light=False, home=False, teach=False, intensity=0.0,
+                    job="autofocus_here_macro") -> Check:
     """Run every step; returns the Check with its results."""
-    c = Check(client, motion, light, home, intensity)
+    allowed = {"motion": motion, "light": light, "home": home, "teach": teach}
+    c = Check(client, allowed, intensity, job)
     await _service(c)
     for feature in FEATURES:
         if feature in c.features:
@@ -198,7 +247,9 @@ async def run_check(client, motion=False, light=False, home=False, intensity=0.0
     source = await _imaging(c)
     await _stage(c)
     await _plate(c, source)
+    await _jobs(c)
     await _handover(c)
+    await _lock(c)
     _untouched(c)
     return c
 
@@ -223,7 +274,8 @@ async def _connect(args) -> Client:
 async def _main(args) -> int:
     client = await _connect(args)
     async with client:
-        c = await run_check(client, args.motion, args.light, args.home, args.intensity)
+        c = await run_check(client, args.motion, args.light, args.home, args.teach,
+                            args.intensity, args.job)
     failed = [r for r in c.results if r[1] == "fail"]
     counts = {s: sum(1 for r in c.results if r[1] == s) for s in ("ok", "fail", "skip")}
     print(f"\n{counts['ok']} ok, {counts['fail']} failed, {counts['skip']} skipped")
@@ -247,6 +299,10 @@ def main(argv=None) -> int:
     p.add_argument("--motion", action="store_true", help="also run steps that move the stage")
     p.add_argument("--light", action="store_true", help="also run steps that switch light on")
     p.add_argument("--home", action="store_true", help="also home the stage (end switches)")
+    p.add_argument("--teach", action="store_true",
+                   help="also overwrite the taught plate origin and loading position")
+    p.add_argument("--job", default="autofocus_here_macro",
+                   help="saved job RunJob runs with --motion --light")
     p.add_argument("--intensity", type=float, default=0.0,
                    help="illumination intensity for the light steps (units of the source)")
     p.add_argument("--json", help="write the results to this file")

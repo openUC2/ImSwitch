@@ -13,6 +13,7 @@ import uuid
 from typing import Any, Dict, List, Optional
 
 from imswitch.imcommon.model import initLogger
+from imswitch.imcontrol.model import workcell_lock
 
 try:
     import structlog
@@ -63,6 +64,11 @@ class SiLa2Manager:
     @property
     def server_uuid(self) -> str:
         return self._info.serverUUID or stable_server_uuid(self._info.serverPort)
+
+    @property
+    def info(self):
+        """The setup's sila2 block (SiLA2Info), or None."""
+        return self._info
 
     def get_config(self) -> Dict[str, Any]:
         """Configuration as reported by getSiLA2Status (no key material)."""
@@ -120,6 +126,8 @@ class SiLa2Manager:
         self._server_thread.start()
 
     def _run_server_loop(self) -> None:
+        # Everything this thread runs acts for the workcell: the workcell lock lets it through.
+        workcell_lock.sila_call.set(True)
         loop = asyncio.new_event_loop()
         asyncio.set_event_loop(loop)
         self._loop = loop
@@ -157,6 +165,11 @@ class SiLa2Manager:
         if not task.cancelled() and task.exception() is not None:
             self._error = str(task.exception())
             self.__logger.error(f"SiLA2 connector: {task.exception()}")
+
+    def call_soon(self, fn, *args) -> None:
+        """Run fn(*args) on the server's event loop (thread-safe); no-op when it is not running."""
+        if self._loop is not None and self._loop.is_running():
+            self._loop.call_soon_threadsafe(fn, *args)
 
     def is_running(self) -> bool:
         return self._running

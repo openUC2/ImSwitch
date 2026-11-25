@@ -801,6 +801,10 @@ class SiLA2Info:
     handoverPositionName: str = "Stage"
     """ Name of the plate hand-over position (LabwareTransferSiteController). """
 
+    plateOrigins: Dict[str, List[float]] = field(default_factory=dict)
+    """ Plate origins taught with SetPlateOrigin: labware load name -> [dx, dy] µm, so that
+    stage = well position in the labware definition + (dx, dy). """
+
 
 @dataclass(frozen=False)
 class ArkitektInfo:

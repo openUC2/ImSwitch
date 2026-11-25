@@ -21,6 +21,7 @@ from datetime import datetime
 import numpy as np
 from fastapi import HTTPException
 from unitelabs.cdk import sila
+from unitelabs.cdk.features.core.lock_controller import lock_controller as _cdk_lock
 from unitelabs.cdk.features.robot.labware_transfer_manipulator_controller import (
     HandoverPosition,
     InvalidCommandSequence,
@@ -58,8 +59,33 @@ class PlateNotCalibrated(Exception):
     """The plate position is unknown. Centre the stage over a well and call SetPlateOrigin."""
 
 
+class NotConfirmed(Exception):
+    """The job has ask-first steps (homing, objective change); run it with Confirmed set."""
+
+
+class JobFailed(Exception):
+    """The job ended as failed or aborted, or stopped at a question only an operator can answer."""
+
+
+_lock_feature = None  # the LockController of the running server, see create_features
+
+
+def lock_active(lock) -> bool:
+    """A held lock that has not timed out; a timeout of 0 s means none (SiLA Lock Controller)."""
+    return lock is not None and (lock.lifetime.total_seconds() == 0 or not lock.is_expired)
+
+
+def touch_lock() -> None:
+    """A call on the workcell's behalf: a held lock counts from now (the SiLA lock timeout
+    runs from the last use). Called from the server's event loop."""
+    lock = _lock_feature._lock if _lock_feature is not None else None
+    if lock is not None:
+        lock.last_usage = datetime.now()
+
+
 async def _call(fn, *args, conflict=InstrumentBusy, **kwargs):
     """Run a blocking ImSwitch call in a thread; map HTTP refusals onto defined errors."""
+    touch_lock()
     try:
         return await asyncio.to_thread(fn, *args, **kwargs)
     except HTTPException as e:
@@ -69,6 +95,8 @@ async def _call(fn, *args, conflict=InstrumentBusy, **kwargs):
             raise UnknownDevice(str(e.detail)) from None
         if e.status_code == 503:
             raise NotAvailable(str(e.detail)) from None
+        if e.status_code == 403:
+            raise NotConfirmed(str(e.detail)) from None
         raise RuntimeError(str(e.detail)) from None
 
 
@@ -91,6 +119,7 @@ class _ImSwitchFeature(sila.Feature):
         self._master = master
 
     def _controller(self, name: str):
+        touch_lock()
         controller = self._master.getController(name)
         if controller is None:
             raise NotAvailable(f"The {name} controller is not loaded in this setup.")
@@ -111,6 +140,7 @@ class _ImSwitchFeature(sila.Feature):
             lasers[name].setEnabled(False)
 
     def _position(self) -> "StagePosition":
+        touch_lock()
         manager = self._master.positionersManager
         pos = manager[_pick("", manager.getAllDeviceNames(), "positioner")].getPosition()
         return StagePosition(x=float(pos.get("X", 0.0)), y=float(pos.get("Y", 0.0)),
@@ -139,6 +169,26 @@ class StagePosition(sila.CustomDataType):
     x: Micrometer
     y: Micrometer
     z: Micrometer
+
+
+@dataclasses.dataclass
+class Objective(sila.CustomDataType):
+    """
+    One objective slot.
+
+    Attributes:
+      Slot: Slot index, used by MoveToObjective.
+      Name: Objective name.
+      Magnification: Magnification.
+      NumericalAperture: Numerical aperture.
+      PixelSize: Pixel size in the sample plane, 0 when not calibrated.
+    """
+
+    slot: int
+    name: str
+    magnification: float
+    numerical_aperture: float
+    pixel_size: Micrometer
 
 
 class StageController(_ImSwitchFeature):
@@ -218,6 +268,14 @@ class StageController(_ImSwitchFeature):
         """
         await _call(self._controller("Positioner").moveToSampleLoadingPosition, is_blocking=True)
         return await asyncio.to_thread(self._position)
+
+    @sila.UnobservableCommand(errors=[NotAvailable])
+    async def teach_loading_position(self) -> None:
+        """
+        Make the current stage position the sample loading position, where a robot puts and
+        takes the plate (Prepare For Input / Output drive there). Saved in the setup.
+        """
+        await _call(self._controller("Positioner").setSampleLoadingPosition, useCurrent=True)
 
     @sila.ObservableCommand(errors=[NotAvailable, InstrumentBusy])
     async def home(self) -> StagePosition:
@@ -340,6 +398,51 @@ class ImagingController(_ImSwitchFeature):
                    name=name, channel_names=[detector])
         return path
 
+    @sila.UnobservableProperty(errors=[NotAvailable])
+    async def get_objectives(self) -> list[Objective]:
+        """The objective slots: index, name, magnification, NA and pixel size."""
+        st = await _call(self._controller("Objective").getstatus)
+        columns = zip(st.get("availableObjectivesNames", []),
+                      st.get("availableObjectiveMagnifications", []),
+                      st.get("availableObjectiveNAs", []),
+                      st.get("availableObjectivePixelSizes", []))
+        return [Objective(slot=i, name=str(name), magnification=float(mag or 0),
+                          numerical_aperture=float(na or 0), pixel_size=float(px or 0))
+                for i, (name, mag, na, px) in enumerate(columns)]
+
+    @sila.UnobservableProperty(errors=[NotAvailable])
+    async def get_current_objective(self) -> int:
+        """Slot index of the objective in the light path."""
+        return int((await _call(self._controller("Objective").getstatus))["currentObjective"])
+
+    @sila.ObservableCommand(errors=[NotAvailable, InstrumentBusy, UnknownDevice])
+    async def move_to_objective(
+        self, slot: typing.Annotated[int, sila.constraints.MinimalInclusive(0)], *,
+        status: sila.Status,
+    ) -> int:
+        """
+        Switch the objective: the turret moves and Z follows the objective's focus offset.
+        The turret sweeps under the sample.
+
+        Args:
+          Slot: Objective slot index, see Objectives.
+
+        Returns:
+          CurrentObjective: Slot index after the move.
+        """
+        self._refuse_if_busy()
+        objective = self._controller("Objective")
+        started = await _call(objective.moveToObjective, slot)
+        if not started.get("accepted", False):
+            reason = started.get("reason", "refused")
+            raise (InstrumentBusy if reason == "busy" else UnknownDevice)(
+                f"Objective slot {slot}: {reason}.")
+        while (state := await _call(objective.getstatus))["isMovingObjective"]:
+            await asyncio.sleep(0.3)
+        if state.get("lastObjectiveMoveError"):
+            raise RuntimeError(state["lastObjectiveMoveError"])
+        return int(state["currentObjective"])
+
     @sila.UnobservableCommand(errors=[UnknownDevice, NotAvailable])
     async def set_exposure_time(self, detector: str, exposure_time: Millisecond) -> None:
         """
@@ -405,7 +508,7 @@ class ImagingController(_ImSwitchFeature):
         if isinstance(started, dict) and started.get("status") == "error":
             raise InstrumentBusy(started.get("message", "Autofocus refused."))
         t0, expected = time.monotonic(), max(2.0, 2 * range_ / step * 0.3)
-        while (state := await asyncio.to_thread(af.getAutofocusStatus))["isRunning"]:
+        while (state := await _call(af.getAutofocusStatus))["isRunning"]:
             status.update(progress=min(0.95, (time.monotonic() - t0) / expected))
             await asyncio.sleep(0.5)
         if state["state"] not in ("finished", "idle"):
@@ -419,14 +522,15 @@ class ExperimentController(_ImSwitchFeature):
     """
     Image well plates and run ImSwitch experiments.
 
-    The plate position on the stage is set once with SetPlateOrigin (stage centred over a
-    known well); MoveToWell and ImageWells then address wells by name, e.g. "B3".
+    The plate position on the stage is taught once per plate type with SetPlateOrigin (stage
+    centred over a known well) and saved in the setup; MoveToWell and ImageWells then address
+    wells by name, e.g. "B3".
     """
 
-    def __init__(self, master, **kwargs):
+    def __init__(self, master, origins: dict = None, save=None, **kwargs):
         super().__init__(master, **kwargs)
-        self._labware = ""
-        self._offset = None  # (dx, dy) µm: stage = well + offset
+        self._origins = origins if origins is not None else {}  # load name -> [dx, dy] µm
+        self._save = save or (lambda: None)
 
     def _experiment(self):
         return self._controller("Experiment")
@@ -440,19 +544,21 @@ class ExperimentController(_ImSwitchFeature):
         except KeyError:
             raise UnknownDevice(f"No labware '{load_name}'. See Labware.") from None
 
-    def _wells(self, tokens: list) -> list:
-        """Wells of the plate for tokens like "A1" or ranges like "A1:B3", stage coordinates."""
+    def _wells(self, labware: str, tokens: list) -> list:
+        """Wells for tokens like "A1" or ranges like "A1:B3", in stage coordinates."""
         from imswitch.imcontrol.model.labware import WellSelectionPattern, resolve_pattern
-        if self._offset is None:
-            raise PlateNotCalibrated("Call SetPlateOrigin first.")
+        lab = self._definition(labware)
+        if labware not in self._origins:
+            raise PlateNotCalibrated(f"No plate origin for '{labware}'. Call SetPlateOrigin.")
+        tokens = [t.strip().upper() for t in tokens]
         ranges = [t for t in tokens if ":" in t]
         singles = [t for t in tokens if ":" not in t]
         pattern = WellSelectionPattern(wells=singles or None, ranges=ranges or None)
         try:
-            wells = resolve_pattern(self._definition(self._labware), pattern)
+            wells = resolve_pattern(lab, pattern)
         except ValueError as e:
             raise UnknownDevice(str(e)) from None
-        dx, dy = self._offset
+        dx, dy = self._origins[labware]
         return [(w.id, w.x + dx, w.y + dy) for w in wells]
 
     @sila.UnobservableProperty(errors=[NotAvailable])
@@ -460,11 +566,16 @@ class ExperimentController(_ImSwitchFeature):
         """Load names of the plate definitions the microscope knows."""
         return [s.get("load_name", "") for s in self._experiment().getLabwareList()]
 
+    @sila.UnobservableProperty()
+    async def get_calibrated_labware(self) -> list[str]:
+        """Plate types with a taught plate origin, usable in MoveToWell and ImageWells."""
+        return sorted(self._origins)
+
     @sila.UnobservableCommand(errors=[UnknownDevice, NotAvailable])
     async def set_plate_origin(self, labware: str, well: str) -> None:
         """
-        Tell the microscope where the plate sits: the stage is now centred over the given well.
-        Kept until ImSwitch restarts.
+        Teach where plates of this type sit: the stage is now centred over the given well.
+        Saved in the setup (sila2.plateOrigins), so it survives a restart.
 
         Args:
           Labware: Load name of the plate, see Labware.
@@ -475,27 +586,30 @@ class ExperimentController(_ImSwitchFeature):
         if w is None:
             raise UnknownDevice(f"'{labware}' has no well '{well}'.")
         pos = await asyncio.to_thread(self._position)
-        self._labware, self._offset = labware, (pos.x - w.x, pos.y - w.y)
+        self._origins[labware] = [pos.x - w.x, pos.y - w.y]
+        await asyncio.to_thread(self._save)
 
     @sila.UnobservableCommand(errors=[UnknownDevice, PlateNotCalibrated, StageLimitReached,
                                       NotAvailable])
-    async def move_to_well(self, well: str) -> StagePosition:
+    async def move_to_well(self, labware: str, well: str) -> StagePosition:
         """
-        Centre the stage over a well of the plate set by SetPlateOrigin.
+        Centre the stage over a well of a plate whose origin was taught with SetPlateOrigin.
 
         Args:
+          Labware: Load name of the plate, see CalibratedLabware.
           Well: Well name, e.g. "B3".
 
         Returns:
           Position: The stage position after the move.
         """
-        (_, x, y), = self._wells([well.strip().upper()])
+        (_, x, y), = self._wells(labware, [well])
         return await self._move(True, x=x, y=y)
 
     @sila.ObservableCommand(errors=[UnknownDevice, PlateNotCalibrated, InstrumentBusy,
                                     NotAvailable])
     async def image_wells(
         self,
+        labware: str,
         wells: list[str],
         illumination: str,
         intensity: float,
@@ -509,6 +623,7 @@ class ExperimentController(_ImSwitchFeature):
         in the data folder). The illumination is switched off afterwards.
 
         Args:
+          Labware: Load name of the plate, see CalibratedLabware.
           Wells: Wells or ranges, e.g. ["A1", "B2:B4"].
           Illumination: Illumination source; empty for the first one.
           Intensity: Intensity in the units of the source.
@@ -518,11 +633,11 @@ class ExperimentController(_ImSwitchFeature):
         Returns:
           DataPath: Folder with the images on the microscope.
         """
-        wells_xy = self._wells([w.strip().upper() for w in wells])
+        wells_xy = self._wells(labware, wells)
         source = _pick(illumination, self._master.lasersManager.getAllDeviceNames(),
                        "illumination source")
         experiment = _well_experiment(wells_xy, source, intensity, exposure_time, autofocus,
-                                      self._labware)
+                                      labware)
         ec = self._experiment()
         await _call(ec.startWellplateExperiment, experiment)
         try:
@@ -534,7 +649,7 @@ class ExperimentController(_ImSwitchFeature):
     async def _wait_for_experiment(self, ec, status) -> None:
         t0 = time.monotonic()
         await asyncio.sleep(0.5)
-        while (await asyncio.to_thread(ec.getExperimentStatus)).get("status") != "idle":
+        while (await _call(ec.getExperimentStatus)).get("status") != "idle":
             status.update(progress=min(0.95, (time.monotonic() - t0) / 600.0))
             await asyncio.sleep(1.0)
 
@@ -607,6 +722,95 @@ def _well_experiment(wells_xy, source, intensity, exposure_ms, autofocus, labwar
             for wid, x, y in wells_xy
         ],
     })
+
+
+# --- jobs (Aufgaben) ----------------------------------------------------------------------------
+
+class JobController(_ImSwitchFeature):
+    """
+    Run saved ImSwitch jobs (Aufgaben): acquisitions composed and saved in the ImSwitch
+    Aufgaben app (loops over wells and positions, channels, autofocus, analysis). A workcell
+    step starts one by name and waits for it.
+    """
+
+    def _aufgaben(self):
+        return self._controller("Aufgaben")
+
+    @sila.UnobservableProperty(errors=[NotAvailable])
+    async def get_jobs(self) -> list[str]:
+        """Names of the saved jobs and the bundled examples."""
+        return [j["name"] for j in await _call(self._aufgaben().listAufgabenJobs)]
+
+    @sila.UnobservableProperty(errors=[NotAvailable])
+    async def get_job_status(self) -> str:
+        """State of the current or last job: idle, running, paused, finished, failed, aborted."""
+        return str((await _call(self._aufgaben().getAufgabenStatus)).get("state", "idle"))
+
+    @sila.ObservableCommand(errors=[UnknownDevice, InstrumentBusy, NotConfirmed, JobFailed,
+                                    NotAvailable])
+    async def run_job(self, name: str, parameters: str, confirmed: bool, *,
+                      status: sila.Status) -> str:
+        """
+        Run a saved job and wait until it ends. The light is off afterwards.
+
+        Args:
+          Name: Job name, see Jobs.
+          Parameters: Job parameters as a JSON object, e.g. {"exposure": 20}; empty for none.
+          Confirmed: Accept the job's ask-first steps (homing, objective change). A job with
+            such steps is refused without it.
+
+        Returns:
+          DataPath: Run folder on the microscope; empty when the job takes no images.
+        """
+        from imswitch.imcontrol.controller.controllers.AufgabenController import (
+            StartAufgabenRequest)
+        try:
+            params = json.loads(parameters) if parameters.strip() else {}
+        except ValueError as e:
+            raise sila.errors.ValidationError(f"Parameters: {e}", "Parameters") from None
+        ab = self._aufgaben()
+        job = await _call(ab.getAufgabenJob, name)
+        request = StartAufgabenRequest(job=job, parameters=params, confirmed=confirmed)
+        started = await _call(ab.startAufgabenJob, request)
+        state = await self._wait_for_job(ab)
+        if state.get("state") != "finished":
+            raise JobFailed(f"Job '{name}' {state.get('state')}: {state.get('message', '')}")
+        return started.get("folder") or ""
+
+    async def _wait_for_job(self, ab) -> dict:
+        while (state := await _call(ab.getAufgabenStatus)).get("state") in ("running", "paused"):
+            if state.get("question"):
+                await _call(ab.abortAufgabenJob, force=True)
+                raise JobFailed(f"The job asked the operator: {state['question']}")
+            await asyncio.sleep(0.5)
+        return state
+
+    @sila.UnobservableCommand(errors=[NotAvailable])
+    async def abort_job(self) -> None:
+        """Abort the running job, if any; the stage stops and the light goes off."""
+        ab = self._aufgaben()
+        if ab.isAufgabenRunning():
+            await _call(ab.abortAufgabenJob, force=True)
+
+
+# --- lock ---------------------------------------------------------------------------------------
+
+class LockController(_cdk_lock.LockController):
+    __doc__ = _cdk_lock.LockController.__doc__
+
+    # The CDK's Lock.is_expired treats a timeout of 0 s as expired at once; the standard says
+    # 0 s means no timeout.
+    @property
+    def lock(self):
+        if self._lock is not None and not lock_active(self._lock):
+            self._event.set()
+            self._lock = None
+        return self._lock
+
+    @lock.setter
+    def lock(self, value) -> None:
+        self._event.set()
+        self._lock = value
 
 
 # --- plate hand-over (passive side) -------------------------------------------------------------
@@ -733,11 +937,16 @@ class LabwareTransferSiteController(_ImSwitchFeature):
         self.labware, self._expected = ("", ""), ""
 
 
-def create_features(master, handover_position_name: str = "Stage") -> list:
-    """The features SiLa2Controller registers."""
+def create_features(master, handover_position_name: str = "Stage", plate_origins=None,
+                    save_setup=None) -> list:
+    """The features SiLa2Controller registers, the SiLA standard Lock Controller last."""
+    global _lock_feature
+    _lock_feature = LockController()
     return [
         StageController(master),
         ImagingController(master),
-        ExperimentController(master),
+        ExperimentController(master, origins=plate_origins, save=save_setup),
+        JobController(master),
         LabwareTransferSiteController(master, handover_position_name),
+        _lock_feature,
     ]

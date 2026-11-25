@@ -1929,6 +1929,16 @@
           "type": "string",
           "description": "Name of the plate hand-over position (LabwareTransferSiteController).",
           "default": "Stage"
+        },
+        "plateOrigins": {
+          "type": "object",
+          "additionalProperties": {
+            "type": "array",
+            "items": {
+              "type": "number"
+            }
+          },
+          "description": "Plate origins taught with SetPlateOrigin: labware load name -> [dx, dy] \u00b5m, so that stage = well position in the labware definition + (dx, dy)."
         }
       }
     },

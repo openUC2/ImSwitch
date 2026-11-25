@@ -699,6 +699,13 @@ login, returns at once), `cancelArkitekt`, `unbindArkitekt` (forgets the stored 
 `setArkitektSettings`, `getArkitektUploads`. Binding is network-only, but once connected the server
 can call the declared actions, which move the stage and switch illumination. **Ask first** before
 binding a real instrument.
+
+`SiLa2Controller` (`docs/SILA2.md`): a SiLA 2 server (UniteLabs CDK, setup block `sila2`, port
+50052) for lab-automation workcells: stage, imaging, well plates / experiments and the SiLA
+standard plate hand-over (`LabwareTransferSiteController`). `getSiLA2Status` over HTTP.
+`imswitch-sila-check --host H --port P` calls every SiLA command; `--motion`, `--light` and
+`--home` add the steps that move, light up or home: **ask first** before those on hardware.
+A connected workcell moves the stage and switches light like any other client.
 | `StresstestController`, `DebugController`, `DemoController`, `AcceptanceTestController` | Diagnostics and self-test |
 
 ---

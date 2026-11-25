@@ -193,6 +193,7 @@
 - **REST HTTP API** for remote control
 - **Python scripting interface**
 - **Arkitekt integration**: bind the microscope to an Arkitekt server by device-code login; stage, illumination, camera, frame and tile-scan actions; images to mikro (see `docs/ARKITEKT.md`)
+- **SiLA 2 server** for lab-automation workcells (UniteLabs): stage, imaging, well-plate imaging, plate hand-over with a robot; `imswitch-sila-check` exercises every command (see `docs/SILA2.md`)
 
 ### Configuration
 - **JSON-based setup files**

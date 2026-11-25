@@ -701,11 +701,14 @@ can call the declared actions, which move the stage and switch illumination. **A
 binding a real instrument.
 
 `SiLa2Controller` (`docs/SILA2.md`): a SiLA 2 server (UniteLabs CDK, setup block `sila2`, port
-50052) for lab-automation workcells: stage, imaging, well plates / experiments and the SiLA
-standard plate hand-over (`LabwareTransferSiteController`). `getSiLA2Status` over HTTP.
-`imswitch-sila-check --host H --port P` calls every SiLA command; `--motion`, `--light` and
-`--home` add the steps that move, light up or home: **ask first** before those on hardware.
-A connected workcell moves the stage and switches light like any other client.
+50052) for lab-automation workcells: stage, imaging, objectives, well plates / experiments,
+saved Aufgaben jobs, the SiLA standard plate hand-over (`LabwareTransferSiteController`) and
+Lock Controller. `getSiLA2Status` / `releaseWorkcellLock` over HTTP. While a workcell holds the
+lock, HTTP requests that move, light or start return **423**; reads and stops stay open — a 423
+is the answer, do not release the lock to get past it unless the user says the workcell is gone.
+`imswitch-sila-check --host H --port P` calls every SiLA command; `--motion`, `--light`,
+`--teach` (overwrites taught plate origin and loading position) and `--home` add the steps that
+move, light up, write the setup or home: **ask first** before those on hardware.
 | `StresstestController`, `DebugController`, `DemoController`, `AcceptanceTestController` | Diagnostics and self-test |
 
 ---

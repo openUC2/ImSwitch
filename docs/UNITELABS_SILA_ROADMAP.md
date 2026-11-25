@@ -33,10 +33,10 @@ Added while building S0–S3 (missing from the first plan):
 
 | WP | Title | Content | Status |
 |---|---|---|---|
-| S7 | Confirm with UniteLabs | Which features their scheduler and operator UI call; the hand-over feature identifier (we use `org.silastandard/instruments.labware.transfer/LabwareTransferSiteController/v1`); cloud endpoint vs local network; TLS required or not; how a JPEG preview should be shaped for their UI | Open |
-| S8 | Lock against the UI | SiLA Lock Controller (CDK ships one): while a workcell holds the lock, the ImSwitch UI and other clients cannot move the stage or switch light | Open |
-| S9 | Persist plate origin and hand-over position | `SetPlateOrigin` is in memory only; teach `sampleLoadingPosition` and the plate origin from the UI and store them in the setup (writes the setup JSON: ask-first on instruments) | Open |
-| S10 | Hardware run of the check | `imswitch-sila-check` without flags, then with `--motion --light`, then `--home`, on the FRAME that goes to UniteLabs; fix what it finds | Open |
+| S7 | Role in the workcell | Decided 2026-11-25: the microscope is a passive device in the UniteLabs workcell; their scheduler runs the workflow and calls our functions. So we expose them: objectives (Objectives, CurrentObjective, MoveToObjective) and saved Aufgaben jobs (Jobs, RunJob, AbortJob) added to the features. Still to confirm with UniteLabs: the hand-over feature identifier, cloud vs local network, TLS | Done (virtual); identifiers to confirm |
+| S8 | Lock against the UI | SiLA standard Lock Controller; while locked, the HTTP API (UI) may read and stop but gets 423 for moves, light and starts, busy checks refuse other starters, the timeout runs from the workcell's last call, `releaseWorkcellLock` frees it by hand. Advisory between SiLA clients (the framework would require the lock id on every call) | Done (virtual) |
+| S9 | Persist plate origin and loading position | `SetPlateOrigin` per labware into `sila2.plateOrigins`; `TeachLoadingPosition` / `PositionerController/setSampleLoadingPosition` into `sampleLoadingPosition{X,Y,Z}`; the virtual stage drives to its loading position too. A UI button for teaching is not built yet | Done (virtual) |
+| S10 | Hardware run of the check | `imswitch-sila-check` without flags, then with `--motion --light`, then `--teach` and `--home`, on the FRAME that goes to UniteLabs; fix what it finds | Open (Bene) |
 | S11 | Quieter error logs | The CDK logs every refusal with a full rich traceback (also expected ones like ValidationError); log defined errors on one line | Open |
 
 ```mermaid
@@ -45,9 +45,10 @@ flowchart LR
   S1 --> S2[S2 hand-over + demo]
   S1 --> S3[S3 check + CI]
   S2 --> S3
+  S7[S7 role: exposed functions] --> S3
+  S8 --> S3
+  S9[S9 persist positions] --> S3
   S3 --> S10[S10 hardware check]
-  S7[S7 confirm with UniteLabs] --> S4
-  S9[S9 persist positions] --> S4
   S10 --> S4[S4 unit on site]
   S8[S8 lock] --> S5
   S4 --> S5[S5 SLAS demo]
@@ -58,9 +59,9 @@ flowchart LR
 
 | When | What |
 |---|---|
-| Week 48 (now) | S0–S3 done on the virtual microscope; S7 questions out |
-| Early December | S9, S10 on the FRAME; hand-over of the unit (S4) before the partner travels; after that, testing goes remote with `imswitch-sila-check` |
-| Mid December – January | S8; S4 fixes from their side; S5 dry runs |
+| Week 48 (now) | S0–S3, S7–S9 done on the virtual microscope; identifiers to confirm with UniteLabs |
+| Early December | S10 on the FRAME; hand-over of the unit (S4) before the partner travels; after that, testing goes remote with `imswitch-sila-check` |
+| Mid December – January | S4 fixes from their side; S5 dry runs |
 | SLAS 2027, San Diego | S5 |
 
 ## Out of scope

@@ -751,7 +751,8 @@ class JobController(_ImSwitchFeature):
     async def run_job(self, name: str, parameters: str, confirmed: bool, *,
                       status: sila.Status) -> str:
         """
-        Run a saved job and wait until it ends. The light is off afterwards.
+        Run a saved job and wait until it ends. A job switches the light off when it ends; a
+        macro (metadata.macro) leaves it as its steps left it.
 
         Args:
           Name: Job name, see Jobs.

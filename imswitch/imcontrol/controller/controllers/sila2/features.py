@@ -6,7 +6,7 @@ same code paths as the HTTP API), so stage travel limits and the "something else
 refusals apply to SiLA clients too. Positions are µm in the ImSwitch user frame.
 
 A refusal the client can act on is a defined execution error (StageLimitReached,
-InstrumentBusy, UnknownDevice, NotAvailable, PlateNotCalibrated).
+InstrumentBusy, UnknownDevice, NotAvailable, PlateNotCalibrated, InvalidCommandSequence).
 """
 
 import asyncio
@@ -21,6 +21,11 @@ from datetime import datetime
 import numpy as np
 from fastapi import HTTPException
 from unitelabs.cdk import sila
+from unitelabs.cdk.features.robot.labware_transfer_manipulator_controller import (
+    HandoverPosition,
+    InvalidCommandSequence,
+    PositionIndex,
+)
 
 MICROMETER = sila.constraints.Unit(
     label="µm", components=[sila.constraints.UnitComponent(unit="Meter")], factor=1e-6)
@@ -604,10 +609,135 @@ def _well_experiment(wells_xy, source, intensity, exposure_ms, autofocus, labwar
     })
 
 
+# --- plate hand-over (passive side) -------------------------------------------------------------
+
+class LabwareTransferSiteController(_ImSwitchFeature):
+    """
+    Hand a plate over between a robot and the microscope stage (the passive side; the robot
+    implements Labware Transfer Manipulator Controller).
+
+    Delivering a plate: PrepareForInput (the stage moves to its loading position and the light
+    goes off), the robot puts the plate, then LabwareDelivered. Taking it: PrepareForOutput, the
+    robot takes the plate, then LabwareRemoved. The microscope has one handover position (the
+    stage insert) and one internal position.
+    """
+
+    def __init__(self, master, position_name: str = "Stage"):
+        # The identifier of the SiLA standard feature, so a scheduler finds it.
+        super().__init__(master, originator="org.silastandard",
+                         category="instruments.labware.transfer")
+        self._position_name = position_name
+        self._expected = ""   # "input" or "output" after the matching Prepare command
+        self._pending = ("", "")
+        self.labware = ("", "")  # (type, unique id) of the plate on the stage; ("", "") = none
+
+    def _check_position(self, handover_position: HandoverPosition) -> None:
+        if handover_position.position != self._position_name:
+            raise InvalidCommandSequence(
+                f"Unknown handover position '{handover_position.position}'; "
+                f"this microscope has '{self._position_name}'.")
+
+    async def _to_loading_position(self, status) -> None:
+        self._refuse_if_busy()
+        await asyncio.to_thread(self._all_light_off)
+        status.update(progress=0.1)
+        await _call(self._controller("Positioner").moveToSampleLoadingPosition, is_blocking=True)
+
+    @sila.UnobservableProperty()
+    async def get_available_handover_positions(self) -> list[HandoverPosition]:
+        """All handover positions of the device including the number of sub-positions."""
+        return [HandoverPosition(position=self._position_name,
+                                 sub_position=PositionIndex(position_index=1))]
+
+    @sila.UnobservableProperty()
+    async def get_number_of_internal_positions(
+        self,
+    ) -> typing.Annotated[int, sila.constraints.MinimalInclusive(value=1)]:
+        """Get the number of addressable internal positions of the device."""
+        return 1
+
+    @sila.ObservableCommand(errors=[InvalidCommandSequence, InstrumentBusy, NotAvailable])
+    async def prepare_for_input(
+        self,
+        handover_position: HandoverPosition,
+        internal_position: PositionIndex,
+        labware_type: str,
+        labware_unique_id: str,
+        *,
+        status: sila.Status,
+    ) -> None:
+        """
+        Put the device into a state in which it is ready to accept new labware at the specified
+        handover position: the light goes off and the stage moves to its loading position.
+
+        Args:
+          HandoverPosition: Indicates the position where the labware will be handed over.
+          InternalPosition: Indicates the position which the labware will be stored at within
+            the device; always 1.
+          LabwareType: Specifies the type of labware that will be handed over.
+          LabwareUniqueID: Represents the unique identification of a labware in the
+            controlling system.
+        """
+        self._check_position(handover_position)
+        if self.labware[0] or self.labware[1]:
+            raise InvalidCommandSequence(f"A plate ({self.labware[1] or self.labware[0]}) is "
+                                         "still on the stage.")
+        await self._to_loading_position(status)
+        self._expected, self._pending = "input", (labware_type, labware_unique_id)
+
+    @sila.ObservableCommand(errors=[InvalidCommandSequence, InstrumentBusy, NotAvailable])
+    async def prepare_for_output(
+        self,
+        handover_position: HandoverPosition,
+        internal_position: PositionIndex,
+        *,
+        status: sila.Status,
+    ) -> None:
+        """
+        Put the device into a state in which it is ready to release the labware at the specified
+        handover position: the light goes off and the stage moves to its loading position.
+
+        Args:
+          HandoverPosition: Indicates the position where the labware will be handed over.
+          InternalPosition: Indicates the position which the labware will be retrieved from
+            within the device; always 1.
+        """
+        self._check_position(handover_position)
+        await self._to_loading_position(status)
+        self._expected = "output"
+
+    @sila.UnobservableCommand(errors=[InvalidCommandSequence])
+    async def labware_delivered(self, handover_position: HandoverPosition) -> None:
+        """
+        Notify the device that the labware item has been placed at the handover position.
+
+        Args:
+          HandoverPosition: Indicates the position where the labware has been handed over.
+        """
+        self._check_position(handover_position)
+        if self._expected != "input":
+            raise InvalidCommandSequence("Prepare For Input was not called.")
+        self.labware, self._expected = self._pending, ""
+
+    @sila.UnobservableCommand(errors=[InvalidCommandSequence])
+    async def labware_removed(self, handover_position: HandoverPosition) -> None:
+        """
+        Notify the device that the labware item has been removed from the handover position.
+
+        Args:
+          HandoverPosition: Indicates the position where the labware has been handed over.
+        """
+        self._check_position(handover_position)
+        if self._expected != "output":
+            raise InvalidCommandSequence("Prepare For Output was not called.")
+        self.labware, self._expected = ("", ""), ""
+
+
 def create_features(master, handover_position_name: str = "Stage") -> list:
     """The features SiLa2Controller registers."""
     return [
         StageController(master),
         ImagingController(master),
         ExperimentController(master),
+        LabwareTransferSiteController(master, handover_position_name),
     ]

@@ -6,13 +6,15 @@ asyncio event loop. Configuration comes from the setup JSON block ``sila2`` (SiL
 """
 
 import asyncio
+import json
 import logging
+import pathlib
 import socket
 import threading
 import uuid
 from typing import Any, Dict, List, Optional
 
-from imswitch.imcommon.model import initLogger
+from imswitch.imcommon.model import dirtools, initLogger
 from imswitch.imcontrol.model import workcell_lock
 
 try:
@@ -33,6 +35,31 @@ def stable_server_uuid(port: int) -> str:
     """One UUID per instrument: the same host and port always give the same UUID, so a
     workcell that registered the microscope finds it again after a restart."""
     return str(uuid.uuid5(UUID_NAMESPACE, f"{socket.gethostname()}:{port}"))
+
+
+def _one_line_refusals(logger, method, event: dict) -> dict:
+    """A refusal the client is told about (defined error, validation error) needs no
+    traceback; rendering one took 0.1-0.3 s per refused call."""
+    if str(event.get("event", "")).startswith(("Defined error", "SiLAError during")):
+        error = event.pop("exc_info", None)
+        if isinstance(error, BaseException):
+            event["error"] = f"{type(error).__name__}: {error}"
+    return event
+
+
+def _configure_cdk_logging() -> None:
+    """INFO and up (the CDK logs every feature definition at debug), refusals on one line,
+    plain tracebacks for real errors."""
+    structlog.configure(
+        wrapper_class=structlog.make_filtering_bound_logger(logging.INFO),
+        processors=[
+            structlog.processors.add_log_level,
+            structlog.processors.TimeStamper(fmt="%Y-%m-%d %H:%M:%S"),
+            _one_line_refusals,
+            structlog.dev.ConsoleRenderer(colors=False,
+                                          exception_formatter=structlog.dev.plain_traceback),
+        ],
+    )
 
 
 class SiLa2Manager:
@@ -90,16 +117,35 @@ class SiLa2Manager:
             version=i.serverVersion, vendor_url=i.vendorUrl, tls=i.tls,
             certificate_chain=i.certificateChain, private_key=i.privateKey,
         )
-        endpoints = []
-        if i.cloudEndpoint:
-            endpoints = [CloudServerConfig(hostname=i.cloudEndpoint, port=i.cloudPort, tls=True)]
-        config = ConnectorBaseConfig(
-            sila_server=sila_server,
-            cloud_servers=CloudServersConfig(enabled=bool(endpoints), endpoints=endpoints),
-        )
+        cloud = self._saved_cloud_servers()
+        if i.cloudEndpoint and not any(e.hostname == i.cloudEndpoint for e in cloud.endpoints):
+            cloud.endpoints.append(CloudServerConfig(
+                name="setup", hostname=i.cloudEndpoint, port=i.cloudPort, tls=True))
+            cloud.enabled = True
+        config = ConnectorBaseConfig(sila_server=sila_server, cloud_servers=cloud)
         if not i.discovery:
             config.discovery = None
+        # The Connection Configuration Service saves server-initiated connections (e.g. to a
+        # cloud) with config.dump(); without a file it fails with NeverLoadedConfig.
+        config._source_path = self._connections_file()
         return config
+
+    @staticmethod
+    def _connections_file() -> pathlib.Path:
+        return pathlib.Path(dirtools.UserFileDirs.Config) / "sila2_connections.json"
+
+    def _saved_cloud_servers(self):
+        """Server-initiated connections a workcell set up earlier (ConnectSiLAClient with
+        Persist), as the connector last saved them; none when there is no file."""
+        path = self._connections_file()
+        try:
+            saved = json.loads(path.read_text()).get("cloud_servers") or {}
+            return CloudServersConfig(**saved)
+        except FileNotFoundError:
+            return CloudServersConfig(enabled=False, endpoints=[])
+        except Exception as e:
+            self.__logger.warning(f"Ignoring {path}: {e}")
+            return CloudServersConfig(enabled=False, endpoints=[])
 
     # ------------------------------------------------------------------
     # Lifecycle
@@ -144,8 +190,8 @@ class SiLa2Manager:
             self.__logger.info("SiLA2 server stopped")
 
     async def _start_connector(self) -> None:
-        if not structlog.is_configured():  # the CDK logs every feature definition at debug
-            structlog.configure(wrapper_class=structlog.make_filtering_bound_logger(logging.INFO))
+        if not structlog.is_configured():
+            _configure_cdk_logging()
         app = Connector(self._connector_config())
         for feature in self._features:
             app.register(feature)

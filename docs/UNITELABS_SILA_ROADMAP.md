@@ -37,7 +37,8 @@ Added while building S0–S3 (missing from the first plan):
 | S8 | Lock against the UI | SiLA standard Lock Controller; while locked, the HTTP API (UI) may read and stop but gets 423 for moves, light and starts, busy checks refuse other starters, the timeout runs from the workcell's last call, `releaseWorkcellLock` frees it by hand. Advisory between SiLA clients (the framework would require the lock id on every call) | Done (virtual) |
 | S9 | Persist plate origin and loading position | `SetPlateOrigin` per labware into `sila2.plateOrigins`; `TeachLoadingPosition` / `PositionerController/setSampleLoadingPosition` into `sampleLoadingPosition{X,Y,Z}`; the virtual stage drives to its loading position too. A UI button for teaching is not built yet | Done (virtual) |
 | S10 | Hardware run of the check | `imswitch-sila-check` without flags, then with `--motion --light`, then `--teach` and `--home`, on the FRAME that goes to UniteLabs; fix what it finds | Open (Bene) |
-| S11 | Quieter error logs | The CDK logs every refusal with a full rich traceback (also expected ones like ValidationError); log defined errors on one line | Open |
+| S11 | Quieter error logs | Refusals (defined and validation errors) log one line with the error; real errors keep a plain traceback. Refusals answer in 1 ms instead of 0.1–0.3 s | Done (virtual) |
+| S12 | Black-box client from the tutorial | A fresh coding agent built a client from the UniteLabs tutorial alone: discovery, all 85 elements, 8 server faults found and fixed, its checks folded into `imswitch-sila-check` (see SILA2.md). Library notes for UniteLabs listed there | Done (virtual) |
 
 ```mermaid
 flowchart LR

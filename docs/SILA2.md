@@ -67,8 +67,8 @@ scheduler can branch on.
 
 | Feature | Elements |
 |---|---|
-| `org.openuc2/microscopy/StageController/v1` | Position, LivePosition (2 Hz); MoveTo (XY), MoveFocusTo (Z), MoveBy, MoveToLoadingPosition, TeachLoadingPosition, Home (frame homing, observable), Stop |
-| `org.openuc2/microscopy/ImagingController/v1` | Detectors, IlluminationSources, Objectives, CurrentObjective; SnapImage (JPEG preview), SaveImage (OME-TIFF in `<data>/SiLA`), SetExposureTime, SetIllumination, SwitchOffIllumination, Autofocus, MoveToObjective (observable) |
+| `org.openuc2/microscopy/StageController/v1` | Position, LivePosition (2 Hz), TravelLimits, LoadingPosition; MoveTo (XY), MoveFocusTo (Z), MoveBy, MoveToLoadingPosition, TeachLoadingPosition, Home (frame homing, observable), Stop |
+| `org.openuc2/microscopy/ImagingController/v1` | Detectors (cameras that take images), IlluminationSources, Illumination (on/off, intensity, range, units, wavelength), ExposureTimes, Objectives, CurrentObjective; SnapImage (JPEG preview), SaveImage (OME-TIFF in `<data>/SiLA`), SetExposureTime, SetIllumination, SwitchOffIllumination, Autofocus, MoveToObjective (observable) |
 | `org.openuc2/microscopy/ExperimentController/v1` | Labware, CalibratedLabware, ExperimentStatus, LastDataPath, ExperimentSchema; SetPlateOrigin, MoveToWell, ImageWells (observable), StartExperiment (any ImSwitch experiment as JSON), Pause/Resume/StopExperiment |
 | `org.openuc2/microscopy/JobController/v1` | Jobs, JobStatus; RunJob (a saved Aufgaben job by name, observable), AbortJob |
 | `org.silastandard/instruments.labware.transfer/LabwareTransferSiteController/v1` | AvailableHandoverPositions, NumberOfInternalPositions; PrepareForInput, LabwareDelivered, PrepareForOutput, LabwareRemoved |
@@ -76,7 +76,12 @@ scheduler can branch on.
 
 Defined errors: `StageLimitReached`, `InstrumentBusy`, `UnknownDevice`, `NotAvailable`,
 `PlateNotCalibrated`, `NotConfirmed`, `JobFailed`, `InvalidCommandSequence`, and the Lock
-Controller's `ServerAlreadyLocked`, `ServerNotLocked`, `InvalidLockIdentifier`.
+Controller's `ServerAlreadyLocked`, `ServerNotLocked`, `InvalidLockIdentifier`. Malformed input
+(bad JSON parameters, an empty well list, an unknown handover or internal position, an intensity
+out of range) is a SiLA validation error, raised before an observable command is accepted.
+Moves, autofocus, objective changes and new scans are refused with `InstrumentBusy` while an
+acquisition, job or calibration runs; ExperimentStatus and JobStatus are constrained to their
+listed values.
 
 RunJob is how a workflow step does anything the fixed commands do not: build the acquisition in
 the ImSwitch Aufgaben app (loops over wells and positions, channels, autofocus, analysis), save
@@ -107,7 +112,8 @@ sequenceDiagram
 ```
 
 PrepareForInput while a plate is on the stage, or LabwareDelivered without PrepareForInput,
-fails with `InvalidCommandSequence`.
+fails with `InvalidCommandSequence`; an unknown handover position or an internal position other
+than 1 is a validation error.
 
 ### Teaching (once per instrument and plate type)
 
@@ -138,9 +144,19 @@ is not refused. In a workcell the scheduler is the only SiLA client.
 
 A SiLA client in the style of the
 [UniteLabs client tutorial](https://docs.unitelabs.io/connector-development/tutorial/build-a-sila-client/)
-that reads every property, takes one value from every observable property, calls every command
-and checks the refusals. Every element of the ImSwitch features and the Lock Controller is either
-run or listed as skipped; the exit code is 1 when one fails.
+that finds the server over mDNS (or takes host and port), reads every property, takes one value
+from every observable property, calls every command and checks the refusals, including the core
+SiLA Service (every feature definition) and Connection Configuration Service. Every element of
+every feature is either run or listed as skipped; the exit code is 1 when one fails. It needs
+only `unitelabs-sila` (`imswitch/sila_check.py`), so it runs on the workcell's computer too.
+
+```bash
+imswitch-sila-check --list
+```
+
+```bash
+imswitch-sila-check --discover --name "FRAME 12"
+```
 
 ```bash
 imswitch-sila-check --host 192.168.1.42 --port 50052
@@ -156,7 +172,7 @@ imswitch-sila-check --discover --name "FRAME 12" --motion --light --intensity 10
 | `--motion` | Small relative moves (50 µm), move to the current position, loading position, MoveToWell, re-selecting the current objective, the hand-over sequence |
 | `--light` | Illumination on at `--intensity` (default 0) |
 | `--motion --light` | Autofocus (±20 µm), ImageWells (A1, A2), RunJob (`--job`, default `autofocus_here_macro`) |
-| `--teach` | SetPlateOrigin (96-well plate, A1 at the current position) and TeachLoadingPosition: overwrites taught values |
+| `--teach` | SetPlateOrigin (96-well plate, A1 at the current position) and TeachLoadingPosition: overwrites taught values; toggles the server-initiated connection mode and sets it back |
 | `--home` | Homing (drives every axis to its end switch) |
 
 On a real instrument run it without flags first; add `--motion` and `--light` only with the
@@ -166,13 +182,36 @@ CI runs it against the virtual microscope with everything except homing, plus a 
 lock keeps HTTP moves out (`imswitch/imcontrol/_test/api/test_sila2.py`, step "SiLA 2 check" in
 `test.yml`).
 
+### A client built from the tutorial alone
+
+On 2026-11-26 a fresh coding agent (no access to ImSwitch's code or docs) was given only the
+tutorial and the running virtual server, with this brief:
+
+> Build a test client that locates the SiLA server "Virtual FRAME" on the network by discovery,
+> connects to it, and tests all of its endpoints, following
+> https://docs.unitelabs.io/connector-development/tutorial/build-a-sila-client/. Treat the
+> server as a black box: learn its features from GetFeatureDefinition. Read every property,
+> take a value from every observable property, call every command, and provoke every declared
+> error. Report coverage, failures, and everything in the feature definitions that made the
+> client hard to write.
+
+In about 30 minutes it covered all 85 elements of the 8 features and found 8 server faults,
+all fixed and now tested by `imswitch-sila-check`: moves and autofocus were not refused during
+a scan, a second scan gave an undefined error, bad JSON and an empty well list were not
+validation errors, an internal position other than 1 was accepted, a timed-out lock was not
+pushed to IsLocked subscribers, and the server-initiated connection mode failed (the connector
+had no file to save it to; now `<config>/sila2_connections.json`). Its integrator complaints
+added TravelLimits, LoadingPosition, Illumination and ExposureTimes, plainer descriptions, and
+one-line logs for refusals (refusals took 0.1–0.3 s while a traceback was rendered, now 1 ms).
+Repeat the run after larger changes.
+
 ### Extending it with an AI coding agent
 
 The check is meant to grow with the features. To have an agent extend it, give it this page,
 the client tutorial above and the running server:
 
 > The SiLA server of this ImSwitch runs at `<host>:<port>`. Read `docs/SILA2.md`,
-> `controllers/sila2/features.py` and `controllers/sila2/check.py`. Add steps to `check.py` so
+> `controllers/sila2/features.py` and `imswitch/sila_check.py`. Add steps to `sila_check.py` so
 > every command and property is called, including the defined errors of the refusals, with
 > motion, light and setup writes behind the existing flags. Run it against the virtual
 > microscope until it passes, and report anything that looks like a server bug instead of
@@ -185,5 +224,10 @@ the client tutorial above and the running server:
   structures the connector kit ships for the manipulator side; to be confirmed against the
   scheduler that drives it.
 - The lock is advisory between SiLA clients (see Lock).
+- Library notes for UniteLabs (unitelabs-sila 0.14 / cdk 0.18): `Client.discover()` drops its
+  TLS arguments and has no timeout setting (the check uses `Discovery.wait_for`); the CDK's lock
+  treats a 0 s timeout as expired and only notices expiry on the next read; lock metadata on a
+  covered feature is required even when unlocked; the Connection Configuration Service needs a
+  config file to save to.
 - No plate-presence sensor: LabwareDelivered is taken on trust.
 - Not tested on hardware yet; tested against the virtual microscope.

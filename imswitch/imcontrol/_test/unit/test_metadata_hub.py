@@ -220,10 +220,30 @@ def test_metadata_hub_detector_update():
     
     hub.register_detector('Camera1', context)
     hub.update_detector('Camera1', exposure_ms=200.0, gain=3.0)
-    
+
     retrieved = hub.get_detector('Camera1')
     assert retrieved.exposure_ms == 200.0
     assert retrieved.gain == 3.0
+
+
+def test_metadata_hub_detector_context_follows_shared_attributes():
+    """A calibrated pixel size published after startup reaches the detector context.
+
+    The context is registered once at startup with the uncalibrated value; snaps
+    and scans read it, so it has to follow the shared attributes.
+    """
+    from imswitch.imcontrol.model.metadata import MetadataHub, DetectorContext
+
+    hub = MetadataHub()
+    hub.register_detector('Cam', DetectorContext(name='Cam', shape_px=(3072, 2048),
+                                                 pixel_size_um=1.0))
+    hub.update(('Detector', 'Cam', 'Pixel size'), [1, 0.5, 0.5])
+    hub.update(('Detector', 'Cam', 'Param', 'exposure'), 12.5)
+    hub.update(('Detector', 'Other', 'Pixel size'), [1, 9.0, 9.0])   # unknown: ignored
+    context = hub.get_detector('Cam')
+    assert context.pixel_size_um == 0.5
+    assert context.fov_um == (1536.0, 1024.0)
+    assert context.exposure_ms == 12.5
 
 
 def test_metadata_hub_snapshot():

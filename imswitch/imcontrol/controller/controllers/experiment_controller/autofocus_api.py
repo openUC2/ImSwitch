@@ -149,7 +149,7 @@ class AutofocusMixin:
         """Budget for one autofocus scan: steps x (settle + a frame), 3x safety.
         A flat two minutes made every hang cost the ceiling.
         """
-        steps = max(1, int(abs(af_range) / max(abs(af_resolution), 1e-6)) + 1)
+        steps = max(1, int(2 * abs(af_range) / max(abs(af_resolution), 1e-6)) + 1)   # ±af_range
         per_step_s = max(af_settle_time, 0.0) + 1.0
         budget = 3.0 * steps * per_step_s * (2.0 if two_stage else 1.0)
         return min(120.0, max(10.0, budget))
@@ -233,14 +233,16 @@ class AutofocusMixin:
                     static_offset=af_static_offset,
                 )
             else:
-                # Z-sweep autofocus: scan through range and fit Gaussian
-                # Determine rangez: prefer af_range, fall back to legacy minZ/maxZ
+                # Z-sweep autofocus: scan through range and fit Gaussian.
+                # af_range is ±µm around the current Z; AutofocusController's
+                # rangez is the FULL width (it scans ±rangez/2). Passing af_range
+                # through scanned half the configured window (±50 µm for ±100).
                 if af_range > 0:
-                    rangez = af_range
+                    rangez = 2.0 * af_range
                 elif maxZ > minZ:
-                    rangez = abs(maxZ - minZ) / 2.0
+                    rangez = abs(maxZ - minZ)
                 else:
-                    rangez = 50.0
+                    rangez = 100.0
 
                 # Determine resolution: prefer af_resolution, fall back to legacy stepSize
                 resolutionz = af_resolution if af_resolution > 0 else (stepSize if stepSize > 0 else 10.0)

@@ -271,6 +271,8 @@ class ExperimentNormalMode(ExperimentModeBase):
                 "illumination_params": illumination_params,
                 "exposures": exposures,
                 "gains": gains,
+                "camera": self.controller._cameraSnapshot()
+                if hasattr(self.controller, "_cameraSnapshot") else None,
                 "autofocus": {
                     "enabled": is_auto_focus,
                     "min": autofocus_min,
@@ -370,6 +372,7 @@ class ExperimentNormalMode(ExperimentModeBase):
                 config=writer_config, logger=self._logger, isRGB=isRGB,
                 omero_connection_params=omero_connection_params, shared_omero_key=shared_omero_key,
                 well_metadata=self.well_metadata(meta), image_name=area_name or None, region_id=region_id,
+                tile_positions=[(tile["x"], tile["y"]) for tile in tiles],
             ))
         if t == 0:
             self.write_plate_sidecar(snake_tiles, region_meta, dir_path)

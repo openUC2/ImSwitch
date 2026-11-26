@@ -27,6 +27,10 @@ try:
 except ImportError:
     HAS_TIFFFILE = False
 
+# Prescan lines tried for the lag calibration before the last known lag is kept
+# (a slide's first lines are often the dark holder end or blank glass).
+_PRESCAN_LAG_TRIES = 6
+
 
 class StageMapParams(BaseModel):
     """Parameters for the stage map (MicroMagellan-style live stitching)."""
@@ -926,6 +930,7 @@ class StageMapController(ImConWidgetController):
     PRESCAN_MAX_STRIP_MB = 64
     # Camera pixels per strip pixel when the caller does not say.
     PRESCAN_SUBSAMPLE = 4
+
     # Exposures kept per line, whatever the pitch asks for.
     PRESCAN_MAX_FRAMES = 200
 
@@ -968,14 +973,22 @@ class StageMapController(ImConWidgetController):
 
             y = minY
             forward = True
+            # The first line of a slide is often the dark holder end or blank
+            # glass, with nothing to correlate: calibrate again on the next lines
+            # until one has contrast (each try costs one extra backward sweep).
+            # A whole prescan with the stale lag zig-zags every other strip.
+            calibrationTries = 0 if lagS is None else _PRESCAN_LAG_TRIES
             while y <= maxY + 1e-6 and not self._shouldStop.is_set():
                 if strobe is not None:
                     self._prescanStrobedLine(minX, maxX, y, forward, speedX, dx, subsample, strobe)
                     forward = not forward
                     y += dy
                     continue
-                if lagS is None:
+                if calibrationTries < _PRESCAN_LAG_TRIES:
+                    calibrationTries += 1
                     lagS, sweep = self._calibratePrescanLag(minX, maxX, y, speedX, dx, subsample)
+                    if getattr(self, "_prescanLagCalibrated", False):
+                        calibrationTries = _PRESCAN_LAG_TRIES
                     self._prescanLagS = lagS
                     self._emitStatus()
                     # Both calibration sweeps ended where they started, so the
@@ -1010,6 +1023,7 @@ class StageMapController(ImConWidgetController):
         has nothing to correlate (blank glass) or a sweep failed.
         """
         fallback = self._prescanLagS
+        self._prescanLagCalibrated = False
         fwd = self._sweepLine(minX, maxX, y, speedX, dx, subsample)
         if fwd is None or self._shouldStop.is_set():
             return fallback, fwd
@@ -1030,6 +1044,7 @@ class StageMapController(ImConWidgetController):
         # are (vF + vB)·lag apart.
         lagS = shiftPx * fwd.scale / max(fwd.speed + bwd.speed, 1e-6)
         lagS = float(min(max(lagS, -0.5), 0.5))
+        self._prescanLagCalibrated = True
         self._logger.info(
             f"Prescan lag calibration: strips {shiftPx * fwd.scale:.0f} µm apart at "
             f"{fwd.speed:.0f}/{bwd.speed:.0f} µm/s -> lag {lagS * 1000:.0f} ms")
@@ -2010,7 +2025,14 @@ class StageMapController(ImConWidgetController):
             if x1 > x0 and y1 > y0:
                 canvas[y0:y1, x0:x1] = img[: y1 - y0, : x1 - x0]
 
-        encoded = self._makePreview(canvas)
+        # Encoded at the canvas size: _makePreview shrinks to the live-preview size
+        # (previewMaxSize), which returned a ~380 px image while widthPx/umPerPixel
+        # described the full canvas - every coordinate taken from it was off ~30x.
+        encoded = None
+        if HAS_CV2:
+            ok, buf = cv2.imencode(".jpg", canvas, [int(cv2.IMWRITE_JPEG_QUALITY),
+                                                    int(self.params.previewQuality)])
+            encoded = base64.b64encode(buf.tobytes()).decode("ascii") if ok else None
         if encoded is None:
             return {"success": False, "error": "Could not encode overview"}
         return {

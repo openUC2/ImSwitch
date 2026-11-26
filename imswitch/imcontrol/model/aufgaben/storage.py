@@ -280,19 +280,48 @@ def _tiff_tile(y: int, x: int) -> Tuple[int, int]:
 def _tiff_tiles(level, planes, tile: Tuple[int, int]):
     """TIFF tiles of each plane in write order, edge tiles zero-padded to full size.
 
-    tifffile takes an iterator of *tiles* when writing tiled pages; one plane is
-    read at a time, so memory stays at one plane.
+    tifffile takes an iterator of *tiles* when writing tiled pages; one band of
+    tile rows is read at a time, so memory stays at one band even for a
+    whole-slide plane of several GB.
     """
     th, tw = tile
+    rows = level.shape[3]
     for p in planes:
-        plane = np.asarray(level[p])
-        for y0 in range(0, plane.shape[0], th):
-            for x0 in range(0, plane.shape[1], tw):
-                block = plane[y0:y0 + th, x0:x0 + tw]
+        for y0 in range(0, rows, th):
+            band = np.asarray(level[tuple(p) + (slice(y0, y0 + th),)])
+            for x0 in range(0, band.shape[1], tw):
+                block = band[:, x0:x0 + tw]
                 if block.shape[:2] != (th, tw):
                     pad = [(0, th - block.shape[0]), (0, tw - block.shape[1])]
                     block = np.pad(block, pad + [(0, 0)] * (block.ndim - 2))
                 yield block
+
+
+class _RgbLevel:
+    """A (T, 3C, Z, Y, X) level read as (T, C, Z, Y, X, 3): interleaved RGB samples."""
+
+    def __init__(self, level):
+        self.level = level
+        t, c, z, y, x = level.shape
+        self.shape = (t, c // 3, z, y, x)
+
+    def __getitem__(self, key):
+        t, c, z = key[:3]
+        rest = tuple(key[3:])
+        if not hasattr(self, "_pool"):
+            from concurrent.futures import ThreadPoolExecutor
+            self._pool = ThreadPoolExecutor(max_workers=3)   # the three samples read in parallel
+        parts = self._pool.map(lambda k: np.asarray(self.level[(t, 3 * c + k, z) + rest]), range(3))
+        return np.stack(list(parts), axis=-1)
+
+
+def _is_rgb(spec: ImageSpec) -> bool:
+    """True for a uint8 image whose channels come in r, g, b triples (a colour camera)."""
+    names = list(spec.channel_names)
+    if np.dtype(spec.dtype) != np.uint8 or not names or len(names) % 3:
+        return False
+    triples = [names[i:i + 3] for i in range(0, len(names), 3)]
+    return all(t[k].endswith(f"_rgb_{s}") for t in triples for k, s in enumerate("rgb"))
 
 
 def _write_ome_tiff(path, levels, spec: ImageSpec, rgb: bool = False) -> Path:
@@ -314,6 +343,7 @@ def _write_ome_tiff(path, levels, spec: ImageSpec, rgb: bool = False) -> Path:
                 else {"subfiletype": 1}
             tif.write(_tiff_tiles(level, planes, tile), shape=(len(planes), y, x) + samples,
                       dtype=spec.dtype, tile=tile, metadata=None, **first,
+                      maxworkers=4,     # tiles compressed in parallel (a slide is ~10^5 tiles)
                       **{**_TIFF_OPTIONS, "photometric": "rgb" if rgb else "minisblack",
                          # tifffile's float predictor needs imagecodecs: integers only
                          "predictor": np.dtype(spec.dtype).kind in "iu"})
@@ -444,22 +474,39 @@ class NgffImage:
         self.array[t, c, z, y0:y0 + h, x0:x0 + w] = plane
         self.t_written = max(self.t_written, t + 1)
 
+    PYRAMID_WORKERS = 4   # planes built in parallel (zarr codecs release the GIL)
+
     def finalize(self, min_size: int = 256, max_levels: int = 5) -> None:
-        """Trim T to what was written, add 2x levels (stride decimation, row bands)."""
+        """Trim T to what was written, add 2x levels (stride decimation, row bands).
+
+        Each level is decimated from the one before ([::2] of level k-1 is [::2^k]
+        of level 0, the same pixels), so the full-resolution canvas is read once,
+        not once per level; the planes of a level are built in parallel.
+        """
+        from concurrent.futures import ThreadPoolExecutor
         source = self.array
         if 0 < self.t_written < source.shape[0]:   # a run that ended early
             source.resize((self.t_written,) + tuple(source.shape[1:]))
         _, _, _, y, x = source.shape
+        prev = source
         while self.levels < max_levels and min(y, x) // 2 ** self.levels >= min_size:
             step = 2 ** self.levels
             shape = source.shape[:3] + (-(-y // step), -(-x // step))
             chunks = (1, 1, 1) + tuple(min(s, c) for s, c in zip(shape[3:], self.chunks_yx))
             level = self._create(str(self.levels), shape, chunks)
-            band = max(step, (self.BAND_ROWS // step) * step)
-            for t, c, z in np.ndindex(*shape[:3]):
-                for y0 in range(0, y, band):
-                    rows = source[t, c, z, y0:y0 + band, :][::step, ::step]
-                    level[t, c, z, y0 // step:y0 // step + rows.shape[0], :] = rows
+            band = max(2, (self.BAND_ROWS // 2) * 2)
+            rows_prev = prev.shape[3]
+
+            def build(plane, prev=prev, level=level, band=band, rows_prev=rows_prev):
+                t, c, z = plane
+                for y0 in range(0, rows_prev, band):
+                    rows = prev[t, c, z, y0:y0 + band, :][::2, ::2]
+                    level[t, c, z, y0 // 2:y0 // 2 + rows.shape[0], :] = rows
+
+            planes = list(np.ndindex(*shape[:3]))
+            with ThreadPoolExecutor(max_workers=max(1, min(self.PYRAMID_WORKERS, len(planes)))) as pool:
+                list(pool.map(build, planes))     # list(): re-raise a worker's error here
+            prev = level
             self.levels += 1
         self.spec.shape = tuple(source.shape)
         self._write_attrs()
@@ -467,9 +514,14 @@ class NgffImage:
     def export_ome_tiff(self, path) -> Path:
         """Write the image and its pyramid (as SubIFDs) to a tiled OME-TIFF.
 
-        Planes are streamed from zarr, never held in memory as a whole.
+        Planes are streamed from zarr, never held in memory as a whole. A colour
+        camera's r, g, b channels become one interleaved RGB channel, which is how
+        QuPath and other brightfield/pathology viewers expect a colour slide.
         """
-        return _write_ome_tiff(path, [self.group[str(i)] for i in range(self.levels)], self.spec)
+        levels = [self.group[str(i)] for i in range(self.levels)]
+        if _is_rgb(self.spec):
+            return _write_ome_tiff(path, [_RgbLevel(level) for level in levels], self.spec, rgb=True)
+        return _write_ome_tiff(path, levels, self.spec)
 
 # --------------------------------------------------------------------------- #
 # Plates

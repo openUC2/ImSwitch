@@ -640,10 +640,8 @@ class CameraHIK:
             param_dict["model_name"] = stName.chCurValue.decode("utf-8")
             if param_dict["model_name"].find("UC")>0:
                 param_dict["isRGB"] = True
-        elif param_dict["isRGB"]:
-            ret = self.camera.MV_CC_SetEnumValue("BalanceWhiteAuto", MV_BALANCEWHITE_AUTO_OFF)
-            if ret != 0:
-                print("set BalanceWhiteAuto failed! ret [0x%x]" % ret)
+        # White balance is left as the camera has it; scans lock it (see
+        # ExperimentController), the white-balance API changes it.
 
 
         # Image Width
@@ -920,8 +918,81 @@ class CameraHIK:
             self.__logger.debug(f"ResultingFrameRate read failed: {e}")
 
     def set_blacklevel(self, blacklevel):
+        """BlackLevel is an integer node on the MV-CS cameras (a float write fails silently)."""
         self.blacklevel = blacklevel
-        self.camera.MV_CC_SetFloatValue("BlackLevel", self.blacklevel)
+        ret = self.camera.MV_CC_SetIntValue("BlackLevel", int(round(float(blacklevel))))
+        if ret != 0:
+            ret = self.camera.MV_CC_SetFloatValue("BlackLevel", float(blacklevel))
+        if ret != 0:
+            self.__logger.warning(f"Set BlackLevel {blacklevel} failed 0x{ret:x}")
+
+    def get_blacklevel(self):
+        st = MVCC_INTVALUE()
+        if self.camera.MV_CC_GetIntValue("BlackLevel", st) == 0:
+            return st.nCurValue
+        stf = MVCC_FLOATVALUE()
+        if self.camera.MV_CC_GetFloatValue("BlackLevel", stf) == 0:
+            return stf.fCurValue
+        return None
+
+    # ------------------------------------------------------------------ white balance
+    # BalanceWhiteAuto: Off (0) = gains locked, Continuous (1), Once (2, then Off).
+    # BalanceRatio is an integer per colour (BalanceRatioSelector Red/Green/Blue);
+    # 1024 is unity gain on the MV-CS series, so the API speaks ratio / 1024.
+    _AWB_MODES = {"manual": 0, "auto": 1, "once": 2}
+    _BALANCE_UNITY = 1024.0
+
+    def get_white_balance_mode(self):
+        st = MVCC_ENUMVALUE()
+        if self.camera.MV_CC_GetEnumValue("BalanceWhiteAuto", st) != 0:
+            return None
+        return {0: "manual", 1: "auto", 2: "once"}.get(st.nCurValue, "manual")
+
+    def set_white_balance_mode(self, mode):
+        mode = str(mode).lower()
+        if mode not in self._AWB_MODES:
+            raise ValueError(f"white balance mode must be one of {list(self._AWB_MODES)}")
+        ret = self.camera.MV_CC_SetEnumValue("BalanceWhiteAuto", self._AWB_MODES[mode])
+        if ret != 0:
+            self.__logger.warning(f"Set BalanceWhiteAuto={mode} failed 0x{ret:x}")
+            return None
+        if mode == "once":
+            # The camera measures on the next frames. Per GenICam it then returns to
+            # Off by itself; the MV-CS060-10UC-PRO stays in "Once" and keeps adapting,
+            # so lock what it found: "once" means measure once, then keep the gains.
+            deadline = time.time() + 1.5
+            while time.time() < deadline and self.get_white_balance_mode() == "once":
+                time.sleep(0.05)
+            if self.get_white_balance_mode() != "manual":
+                self.camera.MV_CC_SetEnumValue("BalanceWhiteAuto", self._AWB_MODES["manual"])
+            return "manual"
+        return mode
+
+    def _balance_selector(self, colour):
+        return {"red": 0, "green": 1, "blue": 2}[colour]
+
+    def get_balance_ratio(self, colour):
+        """Gain of one colour channel relative to unity (1.0), or None."""
+        ret = self.camera.MV_CC_SetEnumValue("BalanceRatioSelector", self._balance_selector(colour))
+        if ret == 0:
+            st = MVCC_INTVALUE()
+            ret = self.camera.MV_CC_GetIntValue("BalanceRatio", st)
+            if ret == 0:
+                return st.nCurValue / self._BALANCE_UNITY
+        if not getattr(self, "_warned_balance_ratio", False):
+            self._warned_balance_ratio = True
+            self.__logger.warning(f"Reading BalanceRatio ({colour}) failed 0x{ret:x}")
+        return None
+
+    def set_balance_ratio(self, colour, gain):
+        """Set one colour's gain (1.0 = unity); only acts while white balance is manual."""
+        if self.camera.MV_CC_SetEnumValue("BalanceRatioSelector", self._balance_selector(colour)) != 0:
+            return None
+        ret = self.camera.MV_CC_SetIntValue("BalanceRatio", int(round(float(gain) * self._BALANCE_UNITY)))
+        if ret != 0:
+            self.__logger.warning(f"Set BalanceRatio {colour}={gain} failed 0x{ret:x}")
+            return None
+        return self.get_balance_ratio(colour)
 
     def set_pixel_format(self, format):
         # Apply the requested pixel format (or fall back to current)
@@ -1137,6 +1208,10 @@ class CameraHIK:
             self.setTriggerSource(property_value)
         elif property_name == 'mode':
             self.set_camera_mode(isAutomatic=property_value)
+        elif property_name == "awb_mode":
+            return self.set_white_balance_mode(property_value)
+        elif property_name in ("red_gain", "blue_gain"):
+            return self.set_balance_ratio(property_name.split("_")[0], property_value)
         else:
             self.__logger.warning(f'Property {property_name} does not exist')
             return False
@@ -1159,9 +1234,11 @@ class CameraHIK:
                 return mode_map.get(stValue.nCurValue, 'manual')
             return 'manual'
         elif property_name == "blacklevel":
-            stValue = MVCC_ENUMVALUE()
-            self.camera.MV_CC_GetEnumValue("BlackLevel", stValue)
-            return stValue.nCurValue
+            return self.get_blacklevel()
+        elif property_name == "awb_mode":
+            return self.get_white_balance_mode()
+        elif property_name in ("red_gain", "blue_gain"):
+            return self.get_balance_ratio(property_name.split("_")[0])
         elif property_name in ("image_width", "Width"):
             stWidth = MVCC_INTVALUE()
             self.camera.MV_CC_GetIntValue("Width", stWidth)

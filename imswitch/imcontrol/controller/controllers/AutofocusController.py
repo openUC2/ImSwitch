@@ -415,7 +415,7 @@ class AutofocusController(ImConWidgetController):
 
         Args:
             center: Center position for scan
-            rangez: Scan range (±rangez from center)
+            rangez: Full scan width (center ± rangez/2)
             axis: Axis name
 
         Returns:
@@ -481,7 +481,8 @@ class AutofocusController(ImConWidgetController):
         Step-scan autofocus with Gaussian peak fit.
 
         Args:
-            rangez: Z-range to scan (±rangez from current position)
+            rangez: Full width of the Z scan in µm, centred on the current Z
+                (scans current ± rangez/2)
             resolutionz: Step size in Z
             defocusz: Defocus offset (currently unused)
             tSettle: Settling time between steps (seconds)
@@ -689,6 +690,8 @@ class AutofocusController(ImConWidgetController):
             self._setAutofocusState(AutofocusState.SCANNING)
             self._commChannel.sigAutoFocusRunning.emit(True)
             axis = gAxis
+            # in-sync grabs, and a running camera (stopped when no live view is open)
+            self._beginTriggeredAcquisition()
 
             # Helper to measure focus at current position (uses shared fast pipeline)
             def measure_focus():
@@ -834,6 +837,8 @@ class AutofocusController(ImConWidgetController):
             self._setAutofocusState(AutofocusState.ERROR)
             self._commChannel.sigAutoFocusRunning.emit(False)
             return None
+        finally:
+            self._endTriggeredAcquisition()
 
     @APIExport(runOnUIThread=True)
     def startLiveMonitoring(self, period: float = 0.5, method: str = "LAPE", nCropsize: int = 2048):
@@ -976,6 +981,17 @@ class AutofocusController(ImConWidgetController):
         fire after the move — eliminating the lag. Returns True if active.
         """
         cam = getattr(self, "camera", None)
+        # Frames only come while the camera acquires. With no live view open it is
+        # stopped: every triggered grab then timed out (FRAME 2026-11-26, "0/11 valid
+        # focus values") and the free-run fallback read one stale frame. Started here,
+        # stopped again in _endTriggeredAcquisition.
+        self._startedAcquisition = False
+        if cam is not None and not getattr(cam, "_running", True) and hasattr(cam, "startAcquisition"):
+            try:
+                cam.startAcquisition()
+                self._startedAcquisition = True
+            except Exception as e:
+                self.__logger.warning(f"Could not start the camera for autofocus: {e}")
         if cam is None or not hasattr(cam, "snapSync") or not hasattr(cam, "setTriggerSource"):
             self._useTriggeredGrab = False
             return False
@@ -991,15 +1007,20 @@ class AutofocusController(ImConWidgetController):
 
     def _endTriggeredAcquisition(self):
         """Restore continuous (free-run) acquisition for the live view."""
-        if not getattr(self, "_useTriggeredGrab", False):
-            return
-        self._useTriggeredGrab = False
-        try:
-            if getattr(self, "camera", None) is not None and hasattr(self.camera, "setTriggerSource"):
-                self.camera.setTriggerSource("continuous")
-                self.__logger.info("Autofocus: camera restored to continuous mode")
-        except Exception as e:
-            self.__logger.warning(f"Could not restore continuous mode: {e}")
+        if getattr(self, "_useTriggeredGrab", False):
+            self._useTriggeredGrab = False
+            try:
+                if getattr(self, "camera", None) is not None and hasattr(self.camera, "setTriggerSource"):
+                    self.camera.setTriggerSource("continuous")
+                    self.__logger.info("Autofocus: camera restored to continuous mode")
+            except Exception as e:
+                self.__logger.warning(f"Could not restore continuous mode: {e}")
+        if getattr(self, "_startedAcquisition", False):
+            self._startedAcquisition = False
+            try:
+                self.camera.stopAcquisition()
+            except Exception as e:
+                self.__logger.warning(f"Could not stop the camera after autofocus: {e}")
 
     def grabCameraFrame(self, frameSync: int = 3, returnFrameNumber: bool = False):
         # Deterministic path: during a triggered scan, fire a software trigger and

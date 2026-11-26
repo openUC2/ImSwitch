@@ -3,14 +3,17 @@
     imswitch-sila-check --host 192.168.1.42 --port 50052
     imswitch-sila-check --discover --motion --light      # virtual microscope: everything
 
+Needs only ``unitelabs-sila``, not a running ImSwitch: it can run on the workcell's computer.
+``--list`` shows the SiLA servers announcing themselves on the network.
+
 Connects like the UniteLabs client tutorial (``sila.client.Client``), reads every property,
 takes one value from every observable property, calls every command of the ImSwitch features
 and checks the defined errors of the refusals. Steps that move the stage need ``--motion``,
 steps that switch light on need ``--light``; ``--home`` adds homing (end switches) and
-``--teach`` the steps that overwrite taught positions in the setup (plate origin, loading
-position). Every command and property of the ImSwitch features and the Lock Controller is
-either run or listed as skipped. Exit code 1 when a step fails or an element is neither run
-nor skipped.
+``--teach`` the steps that overwrite saved settings (plate origin, loading position, the
+server-initiated connection mode, which is set back). Every command and property of the
+server's features is either run or listed as skipped. Exit code 1 when a step fails or an
+element is neither run nor skipped.
 
 On a real instrument: run without flags first; add --motion/--light only when the stage is
 free and nobody looks into the light path, and --teach only on purpose.
@@ -26,6 +29,7 @@ from sila.client import Client, ClientConfig
 
 FEATURES = ("StageController", "ImagingController", "ExperimentController", "JobController",
             "LabwareTransferSiteController", "LockController")
+CORE = ("SiLAService", "ConnectionConfigurationService")  # every CDK server has these
 # Position Index is a one-field structure; on the wire it is the bare index.
 HANDOVER = {"Position": "Stage", "SubPosition": 1}
 INTERNAL = 1
@@ -51,7 +55,7 @@ class Check:
         print(f"[{mark}] {element:<55} {detail}"[:160], flush=True)
 
     async def call(self, feature, command, *, expect_error="", needs=(), timeout=120,
-                   metadata=None, **params):
+                   metadata=None, quiet=False, **params):
         """Run one command; returns its responses, or None when skipped or failed."""
         element = f"{feature}.{command}"
         missing = [n for n in needs if not self.allowed[n]]
@@ -69,8 +73,13 @@ class Check:
         if expect_error:
             self.record(element, "fail", f"expected {expect_error}, got {dict(responses)}")
             return None
-        self.record(element, "ok", _short(responses))
+        if not quiet:
+            self.record(element, "ok", _short(responses))
         return responses
+
+    async def start(self, feature, command, **params):
+        """Start an observable command and return its execution without waiting."""
+        return await self.features[feature].commands[command].execute(parameters=params)
 
     async def _execute(self, handle, params, timeout, metadata):
         if type(handle).__name__ != "ObservableCommand":
@@ -166,11 +175,34 @@ async def _plate(c: Check, source: str):
         for command in ("MoveToWell", "ImageWells"):
             c.record(f"{f}.{command}", "skip", "no taught plate origin (--teach teaches one)")
         return
+    await c.call(f, "ImageWells", Labware=plate, Wells=[], Illumination=source,
+                 Intensity=c.intensity, ExposureTime=20.0, Autofocus=False,
+                 expect_error="ValidationError")
     await c.call(f, "MoveToWell", Labware=plate, Well="A2", needs=("motion",))
     await c.call(f, "MoveToWell", Labware=plate, Well="A1", needs=("motion",))
     await c.call(f, "ImageWells", Labware=plate, Wells=["A1", "A2"], Illumination=source,
                  Intensity=c.intensity, ExposureTime=20.0, Autofocus=False,
                  needs=("motion", "light"), timeout=600)
+    if c.allowed["motion"] and c.allowed["light"]:
+        await _while_busy(c, plate, source)
+
+
+async def _while_busy(c: Check, plate: str, source: str):
+    """While a scan runs, moves, autofocus and a second scan are refused as InstrumentBusy."""
+    f = "ExperimentController"
+    run = await c.start(f, "ImageWells", Labware=plate, Wells=["A1:A6"], Illumination=source,
+                        Intensity=c.intensity, ExposureTime=20.0, Autofocus=False)
+    await asyncio.sleep(1.0)
+    await c.call("StageController", "MoveBy", X=10.0, Y=0.0, Z=0.0,
+                 expect_error="InstrumentBusy")
+    await c.call("ImagingController", "Autofocus", Range=20.0, Step=5.0,
+                 expect_error="InstrumentBusy")
+    await c.call(f, "ImageWells", Labware=plate, Wells=["A1"], Illumination=source,
+                 Intensity=c.intensity, ExposureTime=20.0, Autofocus=False,
+                 expect_error="InstrumentBusy")
+    while not run.done:
+        await asyncio.sleep(0.5)
+    await run.get_responses()
 
 
 async def _jobs(c: Check):
@@ -178,6 +210,8 @@ async def _jobs(c: Check):
     jobs = await c.features[f].properties["Jobs"].read()
     await c.call(f, "RunJob", Name="no-such-job", Parameters="", Confirmed=False,
                  expect_error="UnknownDevice")
+    await c.call(f, "RunJob", Name=c.job, Parameters="not json", Confirmed=False,
+                 expect_error="ValidationError")
     if c.job in jobs:
         await c.call(f, "RunJob", Name=c.job, Parameters="", Confirmed=False,
                      needs=("motion", "light"), timeout=600)
@@ -199,6 +233,25 @@ async def _lock(c: Check):
     await c.call(f, "LockServer", LockIdentifier="forever", Timeout=0)  # 0 s = no timeout
     await asyncio.sleep(1.0)
     await c.call(f, "UnlockServer", LockIdentifier="forever")  # fails if it had expired
+    await _lock_expiry(c)
+
+
+async def _lock_expiry(c: Check):
+    """A lock that times out is reported to IsLocked subscribers without anyone asking."""
+    f = "LockController"
+    await c.call(f, "LockServer", LockIdentifier="short", Timeout=1, quiet=True)
+    stream = await c.features[f].properties["IsLocked"].subscribe()
+    try:
+        seen = []
+        deadline = time.monotonic() + 4.0
+        while time.monotonic() < deadline and seen[-1:] != [False]:
+            seen.append(await asyncio.wait_for(anext(stream), timeout=4.0))
+    except asyncio.TimeoutError:
+        pass
+    finally:
+        stream.cancel() if hasattr(stream, "cancel") else stream.close()
+    c.record(f"{f}.IsLocked", "ok" if seen[-1:] == [False] else "fail",
+             f"a 1 s lock expired, subscribers saw {seen}")
 
 
 async def _handover(c: Check):
@@ -207,7 +260,9 @@ async def _handover(c: Check):
                  expect_error="InvalidCommandSequence")
     await c.call(f, "PrepareForInput", HandoverPosition={**HANDOVER, "Position": "Nowhere"},
                  InternalPosition=INTERNAL, LabwareType="plate", LabwareUniqueID="x",
-                 expect_error="InvalidCommandSequence")
+                 expect_error="ValidationError")
+    await c.call(f, "PrepareForInput", HandoverPosition=HANDOVER, InternalPosition=2,
+                 LabwareType="plate", LabwareUniqueID="x", expect_error="ValidationError")
     ok = await c.call(f, "PrepareForInput", HandoverPosition=HANDOVER, InternalPosition=INTERNAL,
                       LabwareType="96 well plate", LabwareUniqueID="silacheck-1",
                       needs=("motion",))
@@ -235,15 +290,44 @@ async def _service(c: Check) -> str:
     return info["ServerUUID"]
 
 
+async def _core(c: Check):
+    """The SiLA Service (every feature definition must come back as XML) and the
+    connection configuration a cloud or server-initiated setup uses."""
+    f = "SiLAService"
+    implemented = await c.features[f].properties["ImplementedFeatures"].read()
+    bad = []
+    for fid in implemented:
+        xml = await c.call(f, "GetFeatureDefinition", FeatureIdentifier=fid, quiet=True)
+        if xml is None or "<Feature" not in xml["FeatureDefinition"]:
+            bad.append(fid)
+    c.record(f"{f}.GetFeatureDefinition", "fail" if bad else "ok",
+             f"no definition for {bad}" if bad else f"{len(implemented)} feature definitions")
+    await c.call(f, "GetFeatureDefinition", FeatureIdentifier="org.example/x/Nope/v1",
+                 expect_error="UnimplementedFeature")
+    name = await c.features[f].properties["ServerName"].read()
+    await c.call(f, "SetServerName", ServerName=name)  # the same name: nothing changes
+    f = "ConnectionConfigurationService"
+    await c.call(f, "DisconnectSiLAClient", ClientName="silacheck-none", Remove=False,
+                 expect_error="InvalidSiLAClient")
+    # Toggle the server-initiated mode and set it back: it is saved on the microscope, and a
+    # workcell's cloud connection drops while it is off.
+    on = await c.features[f].properties["ServerInitiatedConnectionModeStatus"].read()
+    toggle = ["EnableServerInitiatedConnectionMode", "DisableServerInitiatedConnectionMode"]
+    for command in (toggle[::-1] if on else toggle):
+        await c.call(f, command, needs=("teach",))
+    c.record(f"{f}.ConnectSiLAClient", "skip", "connects the server out to a client; per site")
+
+
 async def run_check(client, motion=False, light=False, home=False, teach=False, intensity=0.0,
                     job="autofocus_here_macro") -> Check:
     """Run every step; returns the Check with its results."""
     allowed = {"motion": motion, "light": light, "home": home, "teach": teach}
     c = Check(client, allowed, intensity, job)
     await _service(c)
-    for feature in FEATURES:
+    for feature in CORE + FEATURES:
         if feature in c.features:
             await c.read_properties(feature)
+    await _core(c)
     source = await _imaging(c)
     await _stage(c)
     await _plate(c, source)
@@ -255,23 +339,55 @@ async def run_check(client, motion=False, light=False, home=False, teach=False, 
 
 
 def _untouched(c: Check) -> None:
-    for feature in FEATURES:
+    for feature in CORE + FEATURES:
         feat = c.features.get(feature)
         for name in list(feat.commands) + list(feat.properties) if feat else []:
             if f"{feature}.{name}" not in c.touched:
                 c.record(f"{feature}.{name}", "fail", "not exercised by the check")
 
 
+async def _discover(args) -> tuple:
+    """Host and port of the server found over mDNS (by --name / --uuid, else the only one)."""
+    from sila.client.discovery import Discovery
+    async with Discovery() as discovery:
+        if args.uuid or args.name:
+            service = await discovery.wait_for(uuid=args.uuid or None, name=args.name or None,
+                                               timeout=args.discover_timeout * 1000)
+        else:
+            await asyncio.sleep(args.discover_timeout)
+            services = list(discovery.services.values())
+            if len(services) != 1:
+                raise SystemExit(f"{len(services)} SiLA servers found; pick one with --name "
+                                 "or --uuid (see --list).")
+            service = services[0]
+    print(f"Found {service.name} ({service.uuid}) at {service.addresses[0]}:{service.port}")
+    return service.addresses[0], service.port
+
+
 async def _connect(args) -> Client:
-    if args.discover:
-        return await Client.discover(uuid=args.uuid or None, name=args.name or None,
-                                     timeout=args.discover_timeout * 1000)
+    # Not Client.discover: in unitelabs-sila 0.14 it drops TLS settings and the timeout.
+    host, port = await _discover(args) if args.discover else (args.host, args.port)
     root = open(args.ca, "rb").read() if args.ca else None
-    return Client(ClientConfig(hostname=args.host, port=args.port, tls=args.tls,
+    return Client(ClientConfig(hostname=host, port=port, tls=args.tls,
                                root_certificates=root, default_timeout=60_000))
 
 
+async def _list(seconds: float) -> int:
+    """Print the SiLA servers that announce themselves on the network."""
+    from sila.client.discovery import Discovery
+    async with Discovery() as discovery:
+        await asyncio.sleep(seconds)
+        services = list(discovery.services.values())
+    for s in services:
+        print(f"{s.name}  uuid={s.uuid}  {', '.join(s.addresses)}:{s.port}")
+    if not services:
+        print("No SiLA server found (multicast blocked? try --host/--port).")
+    return 0 if services else 1
+
+
 async def _main(args) -> int:
+    if args.list:
+        return await _list(args.discover_timeout)
     client = await _connect(args)
     async with client:
         c = await run_check(client, args.motion, args.light, args.home, args.teach,
@@ -292,6 +408,8 @@ def main(argv=None) -> int:
     p.add_argument("--port", type=int, default=50052)
     p.add_argument("--tls", action="store_true", help="connect with TLS")
     p.add_argument("--ca", help="PEM file of the CA that signed the server certificate")
+    p.add_argument("--list", action="store_true",
+                   help="only list the SiLA servers found over mDNS and exit")
     p.add_argument("--discover", action="store_true", help="find the server over mDNS")
     p.add_argument("--uuid", help="with --discover: the server UUID")
     p.add_argument("--name", help="with --discover: the server name")

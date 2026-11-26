@@ -3,9 +3,10 @@ workcell.
 
 Enabled by "SiLa2" in availableWidgets plus a "sila2" block in the setup JSON. The features
 (stage, imaging, well plates and experiments, jobs, plate hand-over, lock) are in
-``sila2/features.py``; ``sila2/check.py`` is a client that exercises every command against a
-running server. While a workcell holds the SiLA lock, ``model/workcell_lock.py`` keeps the
-HTTP API (the UI) from moving, lighting or starting anything.
+``sila2/features.py``; ``imswitch/sila_check.py`` (``imswitch-sila-check``) is a client that
+exercises every command against a running server. While a workcell holds the SiLA lock,
+``model/workcell_lock.py`` keeps the HTTP API (the UI) from moving, lighting or starting
+anything.
 """
 
 from ..basecontrollers import ImConWidgetController

@@ -400,6 +400,7 @@
         "Composite",
         "InLineHolo",
         "Temperature",
+        "OffAxisHoloController",
         "I2CSensor",
         "Aufgaben", "StageMap", "OPM", "SLM"
     ],

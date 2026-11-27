@@ -14,7 +14,9 @@ import apiUC2ConfigControllerSetDisplayFlip from "../backendapi/apiUC2ConfigCont
 import apiUC2ConfigControllerUpdateDisplayDeviceName from "../backendapi/apiUC2ConfigControllerUpdateDisplayDeviceName";
 import apiUC2ConfigControllerStartPalletUpgrade from "../backendapi/apiUC2ConfigControllerStartPalletUpgrade";
 import apiUC2ConfigControllerGetPalletUpgradeStatus from "../backendapi/apiUC2ConfigControllerGetPalletUpgradeStatus";
+import apiUC2ConfigControllerListPalletVersions from "../backendapi/apiUC2ConfigControllerListPalletVersions";
 import {
+  Autocomplete,
   Box,
   Typography,
   Card,
@@ -367,6 +369,29 @@ const SystemUpdateController = () => {
   // --- OS update: Forklift pallet upgrade (EXPERIMENTAL) ------------------
   // state is systemd's ActiveState of the host unit: "activating" while it runs.
   const [palletUpgrade, setPalletUpgrade] = useState({ state: "", log: "" });
+  // Version to switch to: a branch, tag or commit of github.com/openUC2/os-rpi.
+  // Empty = the pallet's stored upgrade query (what `forklift plt upgrade` uses).
+  const [palletVersion, setPalletVersion] = useState("");
+  const [palletVersions, setPalletVersions] = useState({ branches: [], tags: [] });
+  const palletVersioning = palletUpgrade.versioning || {};
+  // "github.com/openUC2/os-rpi@beniroquai-patch-1" -> "beniroquai-patch-1"
+  const storedPalletVersion = (palletVersioning["upgrade-source"] || "").split("@")[1] || "";
+  const palletVersionOptions = [
+    ...new Set(["edge", storedPalletVersion, ...palletVersions.branches].filter(Boolean)),
+    ...palletVersions.tags,
+  ];
+  const palletCommand = palletVersion.trim()
+    ? `forklift plt upgrade --force --allow-downgrade @${palletVersion.trim()} && forklift stage apply`
+    : "forklift plt upgrade --force && forklift stage apply";
+
+  const refreshPalletVersions = async () => {
+    try {
+      const res = await apiUC2ConfigControllerListPalletVersions();
+      if (res?.status === "success") setPalletVersions(res);
+    } catch (e) {
+      // offline: the field still takes any branch, tag or commit by hand
+    }
+  };
 
   const refreshPalletUpgrade = async () => {
     try {
@@ -379,12 +404,14 @@ const SystemUpdateController = () => {
   const handleStartPalletUpgrade = async () => {
     if (
       !window.confirm(
-        "Upgrade the OS software now? ImSwitch restarts during the upgrade and running acquisitions are interrupted.",
+        `Upgrade the OS software now (${palletCommand})? ImSwitch restarts during the upgrade and running acquisitions are interrupted.`,
       )
     )
       return;
     try {
-      const res = await apiUC2ConfigControllerStartPalletUpgrade();
+      const res = await apiUC2ConfigControllerStartPalletUpgrade(
+        palletVersion.trim(),
+      );
       if (res?.status === "started") {
         setPalletUpgrade({ state: "activating", log: "" });
       } else {
@@ -407,7 +434,9 @@ const SystemUpdateController = () => {
 
   // Read the status once, then every 3 s while the upgrade runs.
   useEffect(() => {
-    if (isBackendConnected) refreshPalletUpgrade();
+    if (!isBackendConnected) return;
+    refreshPalletUpgrade();
+    refreshPalletVersions();
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [isBackendConnected]);
   useEffect(() => {
@@ -1087,11 +1116,58 @@ const SystemUpdateController = () => {
             </Typography>
           </Alert>
 
+          {palletVersioning["upgrade-source"] ? (
+            <Box sx={{ mb: 2 }}>
+              {[
+                ["Running", palletVersioning.current],
+                ["After the next reboot", palletVersioning.pending],
+                ["Local pallet", palletVersioning.pallet],
+                ["Stored upgrade query", palletVersioning["upgrade-source"]],
+              ]
+                .filter(([, value]) => value)
+                .map(([label, value]) => (
+                  <Typography key={label} variant="body2">
+                    {label}: <code>{value}</code>
+                  </Typography>
+                ))}
+            </Box>
+          ) : (
+            <Typography variant="body2" color="text.secondary" sx={{ mb: 2 }}>
+              The pallet version of this machine is unknown (this OS version
+              does not share it with ImSwitch yet).
+            </Typography>
+          )}
+
+          <Autocomplete
+            freeSolo
+            options={palletVersionOptions}
+            groupBy={(option) =>
+              palletVersions.tags.includes(option) ? "Release tags" : "Branches"
+            }
+            inputValue={palletVersion}
+            onInputChange={(event, value) => setPalletVersion(value || "")}
+            sx={{ mb: 2, maxWidth: 480 }}
+            renderInput={(params) => (
+              <TextField
+                {...params}
+                size="small"
+                label="Version (branch, tag or commit)"
+                placeholder={
+                  storedPalletVersion
+                    ? `empty = stored query (${storedPalletVersion})`
+                    : "empty = stored upgrade query"
+                }
+                helperText="Pick e.g. edge to leave a branch that no longer exists. Changes to OS files apply after a reboot."
+                InputLabelProps={{ shrink: true }}
+              />
+            )}
+          />
+
           <Paper
             component="pre"
-            sx={{ p: 1.5, mb: 2, bgcolor: "background.default", fontSize: 13 }}
+            sx={{ p: 1.5, mb: 2, bgcolor: "background.default", fontSize: 13, whiteSpace: "pre-wrap" }}
           >
-            forklift plt upgrade --force &amp;&amp; forklift stage apply
+            {palletCommand}
           </Paper>
 
           <Box sx={{ display: "flex", alignItems: "center", gap: 2, mb: 1 }}>

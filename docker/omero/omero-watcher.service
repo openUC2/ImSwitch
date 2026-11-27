@@ -1,0 +1,29 @@
+# systemd unit for the ImSwitch -> OMERO importer.
+#
+# Install on the Pi (adjust the two paths if your checkout lives elsewhere):
+#   sudo cp docker/omero/omero-watcher.service /etc/systemd/system/
+#   sudo systemctl daemon-reload
+#   sudo systemctl enable --now omero-watcher.service
+#   journalctl -u omero-watcher -f          # follow the logs
+#
+# It waits for Docker, then runs watcher.py with the system python3 (no venv needed).
+
+[Unit]
+Description=ImSwitch -> OMERO importer (watches the data folder, imports new acquisitions)
+After=docker.service network-online.target
+Requires=docker.service
+Wants=network-online.target
+
+[Service]
+Type=simple
+# Run as the user that owns the ImSwitch data and can talk to Docker (in the `docker`
+# group). On a stock Raspberry Pi OS image that is `pi`; change if yours differs.
+User=pi
+Group=docker
+WorkingDirectory=/home/pi/ImSwitch/docker/omero
+ExecStart=/usr/bin/python3 /home/pi/ImSwitch/docker/omero/watcher.py
+Restart=always
+RestartSec=5
+
+[Install]
+WantedBy=multi-user.target

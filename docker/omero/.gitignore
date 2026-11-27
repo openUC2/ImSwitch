@@ -1,0 +1,5 @@
+# Local secrets + runtime state — never commit these.
+.env
+.omero_watcher_state.json
+.omero_watcher_state.json.tmp
+__pycache__/

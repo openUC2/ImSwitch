@@ -1,0 +1,70 @@
+# OMERO visualization stack for ImSwitch acquisitions.
+#
+# Runs alongside the main ImSwitch container (see ../docker-compose.yml) and gives
+# you a web image viewer/database for everything ImSwitch writes to its data folder.
+#
+# ARM64 note (Raspberry Pi 5): the official `openmicroscopy/*` images are amd64-only
+# and will not run on a Pi. We therefore use the community multi-arch fork by
+# @manics, which publishes linux/amd64 + linux/arm64 (verified June 2026).
+#
+# This file deliberately does NOT touch the ImSwitch stack. Bring it up with:
+#     docker compose -f docker/omero/docker-compose.yml up -d
+# Full runbook: see README.md in this folder.
+
+name: imswitch-omero
+
+services:
+  db:
+    image: postgres:15
+    environment:
+      POSTGRES_DB: ${OMERO_DB_NAME:-omero}
+      POSTGRES_USER: ${OMERO_DB_USER:-omero}
+      POSTGRES_PASSWORD: ${OMERO_DB_PASS:-omero}
+    volumes:
+      - omero-db:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U ${OMERO_DB_USER:-omero} -d ${OMERO_DB_NAME:-omero}"]
+      interval: 10s
+      timeout: 5s
+      retries: 12
+    restart: unless-stopped
+
+  server:
+    image: ${OMERO_SERVER_IMAGE:-ghcr.io/manics/omero-server-docker:ubuntu}
+    container_name: ${OMERO_SERVER_CONTAINER:-omero-server}
+    environment:
+      CONFIG_omero_db_host: db
+      CONFIG_omero_db_user: ${OMERO_DB_USER:-omero}
+      CONFIG_omero_db_pass: ${OMERO_DB_PASS:-omero}
+      CONFIG_omero_db_name: ${OMERO_DB_NAME:-omero}
+      ROOTPASS: ${OMERO_ROOT_PASS:-omero}
+    ports:
+      - "4063:4063"   # OMERO (unencrypted) — for desktop clients (OMERO.insight) if wanted
+      - "4064:4064"   # OMERO (SSL)
+    volumes:
+      # ImSwitch's acquisition folder, mounted READ-ONLY at the SAME path the host
+      # uses. The identical path is required so that in-place (transfer=ln_s) imports
+      # resolve: OMERO stores a symlink to the original file and reads it back later.
+      - ${IMSWITCH_DATA_DIR:-/home/pi/Datasets}:${IMSWITCH_DATA_DIR:-/home/pi/Datasets}:ro
+      # OMERO's own managed repository (symlinks + thumbnails + search index).
+      - omero-data:/OMERO
+    depends_on:
+      db:
+        condition: service_healthy
+    restart: unless-stopped
+
+  web:
+    image: ${OMERO_WEB_IMAGE:-ghcr.io/manics/omero-web-docker:ubuntu}
+    container_name: ${OMERO_WEB_CONTAINER:-omero-web}
+    environment:
+      # Point the web client at the server service over the compose network.
+      OMEROHOST: server
+    ports:
+      - "${OMERO_WEB_PORT:-4080}:4080"
+    depends_on:
+      - server
+    restart: unless-stopped
+
+volumes:
+  omero-db:
+  omero-data:

@@ -33,7 +33,7 @@ from imswitch.imcontrol.model.SetupInfo import ArkitektInfo
 REQUIRED_PACKAGES = ("arkitekt", "rekuest")
 # The client this code is written for (pinned with its family in pyproject.toml).
 # An older one fails at the login instead: its device-code hook takes other arguments.
-ARKITEKT_VERSION = "16.0.1"
+ARKITEKT_VERSION = "19.0.1"
 DEFAULT_URL = "https://go.arkitekt.live"
 # A device code lives about five minutes; a manual bind asks for a fresh one this
 # many times (about half an hour) before it gives up.
@@ -364,7 +364,7 @@ class ArkitektManager:
         with self._lock:
             self._loop, self._task = asyncio.get_running_loop(), asyncio.current_task()
         app = self._factory(self.identifier, self._version)
-        self._services = list(app.services)
+        self._services = [r.key for r in app.requirements]  # e.g. mikro, s3: what the app needs
         reauth, renewals = False, 0
         while True:
             try:

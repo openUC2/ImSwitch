@@ -331,9 +331,10 @@ class ArkitektController(ImConWidgetController):
         from arkitekt import App
 
         mikro_types = self._mikro_types() if self._manager.info.useMikro else None
+        # The image actions take the Mikro client as a parameter: that is how the app asks for
+        # mikro (arkitekt 19 has no services= list).
         app = App(identifier, version,
-                  description="openUC2 ImSwitch microscope: stage, illumination, camera",
-                  services=[mikro_types["service"]] if mikro_types else [])
+                  description="openUC2 ImSwitch microscope: stage, illumination, camera")
         offered: List[dict] = []
         offer = self._offerer(app, offered)
         lasers = list(self._master.lasersManager.getAllDeviceNames())
@@ -589,12 +590,12 @@ class ArkitektController(ImConWidgetController):
 
     def _mikro_types(self) -> Optional[dict]:
         try:
-            from mikro import Mikro, mikro_service
+            from mikro import Mikro
             from mikro.arkitekt.specs import MultichannelImage
         except ImportError as e:
             self._logger.warning(f"mikro not installed, no image actions: {e}")
             return None
-        return {"Mikro": Mikro, "service": mikro_service, "Image": MultichannelImage}
+        return {"Mikro": Mikro, "Image": MultichannelImage}
 
     # ── activity log (what the panel shows) ─────────────────────────────────
 

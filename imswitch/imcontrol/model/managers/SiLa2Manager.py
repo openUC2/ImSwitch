@@ -6,6 +6,7 @@ asyncio event loop. Configuration comes from the setup JSON block ``sila2`` (SiL
 """
 
 import asyncio
+import ipaddress
 import json
 import logging
 import pathlib
@@ -21,7 +22,7 @@ try:
     import structlog
     from unitelabs.cdk import Connector
     from unitelabs.cdk.config import ConnectorBaseConfig, SiLAServerConfig, CloudServerConfig
-    from unitelabs.cdk.config.connector_base_config import CloudServersConfig
+    from unitelabs.cdk.config.connector_base_config import CloudServersConfig, DiscoveryConfig
     HAS_SILA2 = True
 except ImportError:
     Connector = None
@@ -29,6 +30,20 @@ except ImportError:
 
 SERVER_TYPE = "Microscope"
 UUID_NAMESPACE = uuid.UUID("6f1b4c59-3d0e-4d3f-9a59-0c2a1b6e5e11")  # openUC2 ImSwitch SiLA servers
+
+
+def lan_addresses() -> List[str]:
+    """IPv4 addresses of this computer's network interfaces, without loopback and
+    link-local ones: where a SiLA client on another computer can reach the server."""
+    import psutil
+    found = set()
+    for addresses in psutil.net_if_addrs().values():
+        for a in addresses:
+            if a.family == socket.AF_INET:
+                ip = ipaddress.ip_address(a.address)
+                if not (ip.is_loopback or ip.is_link_local):
+                    found.add(a.address)
+    return sorted(found)
 
 
 def stable_server_uuid(port: int) -> str:
@@ -123,8 +138,11 @@ class SiLa2Manager:
                 name="setup", hostname=i.cloudEndpoint, port=i.cloudPort, tls=True))
             cloud.enabled = True
         config = ConnectorBaseConfig(sila_server=sila_server, cloud_servers=cloud)
-        if not i.discovery:
-            config.discovery = None
+        # Without interfaces the library announces 127.0.0.1 for a server on 0.0.0.0, and
+        # clients on other computers (UniteLabs GroundControl) then connect to themselves.
+        # With interfaces it announces each interface's own address through that interface.
+        config.discovery = DiscoveryConfig(network_interfaces=lan_addresses()) if i.discovery \
+            else None
         # The Connection Configuration Service saves server-initiated connections (e.g. to a
         # cloud) with config.dump(); without a file it fails with NeverLoadedConfig.
         config._source_path = self._connections_file()

@@ -27,6 +27,15 @@ def test_connector_config():
     assert config.sila_server.uuid == manager.server_uuid
 
 
+def test_discovery_announces_network_addresses():
+    """Without interfaces the library announced 127.0.0.1, and GroundControl on another
+    computer connected to itself; every interface now announces its own address."""
+    from imswitch.imcontrol.model.managers.SiLa2Manager import lan_addresses
+    config = SiLa2Manager(SiLA2Info())._connector_config().discovery
+    assert config.network_interfaces == lan_addresses()
+    assert not any(a.startswith("127.") for a in config.network_interfaces)
+
+
 def test_disabled_without_setup_block():
     manager = SiLa2Manager(None)
     assert not manager.is_enabled()

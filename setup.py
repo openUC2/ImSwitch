@@ -67,8 +67,6 @@ setup(
         "zarr>=3.0.0a0",
         "numcodecs>=0.13.1",
         "aiohttp>=3.9.4",
-        "mikro-next>=0.18.0",
-        "arkitekt-next[all]>=0.39.5",
         "koil>=2.0.5",
         "msgpack>=1.0.4",
         "esptool", 
@@ -88,11 +86,6 @@ setup(
         ],
         'microEye': [
                     "numba>=0.61.2"
-        ],
-        'arkitekt':
-            [
-            "arkitekt==0.7.8",
-            "arkitekt_next>=0.35.0"
         ],
         # Test dependencies for API testing
         'testing': [

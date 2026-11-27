@@ -6,11 +6,12 @@ organizations live on a coordination server (the public `https://go.arkitekt.liv
 (a *hub*) can run anywhere, also on the microscope's own Pi: see
 [arkitekt-hub-pi.md](arkitekt-hub-pi.md).
 
-ImSwitch uses the `arkitekt` client 16 with mikro 14 (the family is pinned in `pyproject.toml`;
-the hub must run rekuest 19 and mikro 15):
+ImSwitch uses the `arkitekt` client 19 with mikro 15 (the family is pinned in `pyproject.toml`: the
+set every stainSTORM app uses, which runs against go.arkitekt.live; a hub of the microscope's own
+must speak it too):
 
 ```bash
-pip install "arkitekt[rekuest,mikro]==16.0.1"
+pip install "arkitekt[rekuest,mikro]==19.0.1"
 ```
 
 Without the package ImSwitch starts normally. The Arkitekt panel then says what to install, and

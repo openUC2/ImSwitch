@@ -1624,8 +1624,11 @@ const WellSelectorCanvas = forwardRef((props, ref) => {
           if (
             isWellInsideSelection(well, mouseDownPosition, mouseMovePosition)
           ) {
-            // Use the selected cup shape from wellSelectorState
-            const selectedShape = wellSelectorState.cupSelectShape === 'circle' ? Shape.CIRCLE : Shape.RECTANGLE;
+            // A rectangular well (a slide) is imaged as its rectangle; for round
+            // wells the selected cup shape decides.
+            const selectedShape = well.shape === "rectangle"
+              ? Shape.RECTANGLE
+              : wellSelectorState.cupSelectShape === 'circle' ? Shape.CIRCLE : Shape.RECTANGLE;
             
             dispatch(
               experimentSlice.createPoint({

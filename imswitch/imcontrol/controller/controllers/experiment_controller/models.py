@@ -9,7 +9,7 @@ import Experiment`` style imports.
 """
 
 from datetime import datetime
-from typing import Any, Dict, List, Literal, Optional, Union
+from typing import Any, ClassVar, Dict, List, Literal, Optional, Tuple, Union
 
 from pydantic import BaseModel, Field
 
@@ -199,6 +199,12 @@ class ParameterValue(BaseModel):
     autoFocusMin: float
     autoFocusMax: float
     autoFocusStepSize: float
+    # What the Z / Focus panel shows and edits (±range around the start Z, step).
+    # When sent they define the search; autoFocusMin/Max/StepSize remain for
+    # clients that do not send them. The panel's values never reached a run:
+    # a browser with Min/Max 0 and StepSize 0.1 focused in 2000 planes.
+    autoFocusRange: Optional[float] = None
+    autoFocusResolution: Optional[float] = None
     autoFocusIlluminationChannel: str = ""
     autoFocusMode: AutoFocusMode = "software"
     autoFocusSoftwareMethod: AutoFocusSoftwareMethod = "scan"
@@ -242,7 +248,10 @@ class ParameterValue(BaseModel):
     zStackOffsets: List[float] = Field(default_factory=list)
     exposureTimes: Union[List[float], float] = None
     gains: Union[List[float], float] = None
-    speed: float = 20000.0
+    # XY stage speed of the scan in the stage's own units (UC2/ESP32: firmware
+    # steps/s, 80000 = 25 mm/s at 0.3125 µm/step); 0 = the instrument's
+    # experiment.scanSpeedXY from the setup (20000 when it has none).
+    speed: float = 0.0
     z_speed: float = 5000.0
     # Stage acceleration (steps/s²) for the scan. <= 0 → keep the controller
     # defaults. XY is applied to move_stage_xy, Z to move_stage_z.
@@ -274,6 +283,18 @@ class ParameterValue(BaseModel):
     ome_write_stitched_tiff: bool = Field(False, description="Whether to write stitched OME-TIFF files")
     ome_write_individual_tiffs: bool = Field(False, description="Whether to write individual TIFF files per frame")
     ome_write_ashlar_stitch: bool = Field(False, description="Whether to run Ashlar stitching after acquisition")
+    flatField: bool = Field(
+        False,
+        description="Divide the stitched image (OME-Zarr canvas, stitched OME-TIFF, OMERO) by a "
+                    "flat-field reference of blank glass, per light; individual tiles stay raw. "
+                    "The reference used is copied into the run folder.")
+    flatFieldX: Optional[float] = Field(
+        None, description="Blank glass (stage µm) where a fresh reference of the first light is "
+                          "taken at the start of the run; None: the stored reference of this "
+                          "objective (captureFlatField).")
+    flatFieldY: Optional[float] = Field(None, description="See flatFieldX.")
+    flatFieldFrames: int = Field(9, description="Fields averaged for the reference (a grid).")
+    flatFieldSpacingUm: float = Field(150.0, description="Spacing of the reference fields (µm).")
     ashlar_pixel_size: float = Field(1.0, description="Pixel size for Ashlar stitching (µm/px)")
     ashlar_maximum_shift: float = Field(50.0, description="Maximum shift for Ashlar tile alignment (µm)")
     ashlar_align_channel: int = Field(0, description="Channel index used for Ashlar tile alignment")
@@ -354,6 +375,23 @@ class ParameterValue(BaseModel):
         """Number of illumination channels with intensity > 0."""
         return sum(1 for v in (self.illuIntensities or []) if v and v > 0)
 
+    # A software autofocus sweep never takes more planes than this.
+    MAX_AUTOFOCUS_PLANES: ClassVar[int] = 101
+
+    def _autofocus_search(self) -> Tuple[float, float]:
+        """(±range, step) in µm: the panel's when given, else Min/Max/StepSize.
+
+        The step grows when the sweep would need more than MAX_AUTOFOCUS_PLANES.
+        """
+        if self.autoFocusRange is not None and self.autoFocusRange > 0:
+            af_range = float(self.autoFocusRange)
+            af_resolution = float(self.autoFocusResolution or 10.0)
+        else:
+            af_range = abs(self.autoFocusMax - self.autoFocusMin) / 2.0 or 100.0
+            af_resolution = self.autoFocusStepSize or 10.0
+        af_resolution = max(af_resolution, 2.0 * af_range / (self.MAX_AUTOFOCUS_PLANES - 1))
+        return af_range, af_resolution
+
     def autofocus_kwargs(self) -> Dict[str, Any]:
         """The autofocus settings, as ExperimentController.autofocus() takes them.
 
@@ -362,10 +400,11 @@ class ParameterValue(BaseModel):
         settings reached the hardware depended on whether a run went through the
         focus-map phase or the per-point autofocus step.
         """
+        af_range, af_resolution = self._autofocus_search()
         return {
             "mode": self.autoFocusMode,
-            "af_range": abs(self.autoFocusMax - self.autoFocusMin) / 2.0 or 100.0,
-            "af_resolution": self.autoFocusStepSize or 10.0,
+            "af_range": af_range,
+            "af_resolution": af_resolution,
             "illuminationChannel": self.autoFocusIlluminationChannel or "",
             "max_attempts": self.autofocus_max_attempts,
             "target_focus_setpoint": self.autofocus_target_focus_setpoint,
@@ -562,6 +601,11 @@ class ExperimentWorkflowParams(BaseModel):
     pixel_size_um: float = Field(
         1.0,
         description="Calibrated pixel size (µm/px) of the primary acquisition detector.",
+    )
+    scanSpeedXY: float = Field(
+        20000.0,
+        description="The instrument's XY scan speed (setup experiment.scanSpeedXY), in the "
+                    "stage's speed units; what a run uses when its speed is 0.",
     )
     # Optional LED-matrix hardware metadata used by the Wellplate designer to
     # clamp slider ranges (max ring radius depends on the physical matrix

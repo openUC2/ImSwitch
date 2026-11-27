@@ -73,7 +73,7 @@ const initialExperimentState = {
     // hand-picked planes from zStackOffsets (Individual Slices / Table tabs).
     zStackMode: "range",
     zStackOffsets: [], // relative µm offsets, used when zStackMode === "individual"
-    speed: 20000,
+    speed: 0, // 0 = this instrument's tested speed (setup experiment.scanSpeedXY)
     z_speed: 5000,
     // Stage acceleration (steps/s²) for the scan. Applied to XY and Z moves.
     acceleration: 1000000,
@@ -91,6 +91,12 @@ const initialExperimentState = {
     ome_write_tiff: false,
     ome_write_zarr: false,
     ome_write_stitched_tiff: true,
+    // Shading (flat-field) correction of the stitched image. flatFieldX/Y: clear
+    // glass where a fresh reference is taken at the start of the run (set by
+    // "Detect tissue"); null = the stored reference of the objective.
+    flatField: false,
+    flatFieldX: null,
+    flatFieldY: null,
     ome_write_individual_tiffs: false,
     ome_write_ashlar_stitch: false,
     ashlar_pixel_size: 1.0, // µm/pixel — physical pixel size for Ashlar alignment
@@ -358,6 +364,14 @@ const experimentSlice = createSlice({
       console.log("setOmeWriteZarr", action.payload);
       state.parameterValue.ome_write_zarr = action.payload;
     },
+    setFlatField: (state, action) => {
+      state.parameterValue.flatField = Boolean(action.payload);
+    },
+    // {x, y} of clear glass for the shading reference, or null for the stored one
+    setFlatFieldSpot: (state, action) => {
+      state.parameterValue.flatFieldX = action.payload ? action.payload.x : null;
+      state.parameterValue.flatFieldY = action.payload ? action.payload.y : null;
+    },
     setOmeWriteStitchedTiff: (state, action) => {
       console.log("setOmeWriteStitchedTiff", action.payload);
       state.parameterValue.ome_write_stitched_tiff = action.payload;
@@ -485,6 +499,11 @@ const experimentSlice = createSlice({
         // ``neighborPointList`` is only the current tiling of it.
         polygon: Array.isArray(action.payload.polygon)
           ? action.payload.polygon.map((p) => ({ x: p.x, y: p.y }))
+          : undefined,
+        // Autofocus points for the focus map (stage µm), e.g. spread over the
+        // tissue by "Detect tissue"; used instead of a grid over the bounds.
+        focusPoints: Array.isArray(action.payload.focusPoints)
+          ? action.payload.focusPoints.map((p) => ({ x: p.x, y: p.y }))
           : undefined,
       };
 
@@ -664,6 +683,8 @@ export const {
   setOmeWriteTiff,
   setOmeWriteZarr,
   setOmeWriteStitchedTiff,
+  setFlatField,
+  setFlatFieldSpot,
   setOmeWriteIndividualTiffs,
   setOmeWriteAshlarStitch,
   setAshlarPixelSize,

@@ -347,6 +347,36 @@ class FocusMapMixin:
                 continue
         return explicit
 
+    # A focus beyond the window shows as a peak at its edge: search once more,
+    # centred on that edge, so Z goes at most twice the configured range away.
+    FOCUS_EDGE_RETRIES = 1
+
+    def _autofocus_following_edge(self, af_kwargs, group_id: str = ""):
+        """Autofocus at the current Z; when the peak sits at an edge of the window, again there.
+
+        Slides in one holder sit at different heights: on the FRAME (2026-11-27)
+        slide 3 fell ~10 um per mm along Y and slide 2 lay more than 150 um below
+        the median of slide 3's points, so the first window of a region, centred on
+        that median, missed its focus at every one of 9 points. A flat curve (no
+        texture) is not followed.
+        """
+        best_z = self.autofocus(**af_kwargs)
+        for _ in range(self.FOCUS_EDGE_RETRIES):
+            if best_z is not None:
+                break
+            ctrl = self._master.getController('Autofocus') if hasattr(self, "_master") else None
+            quality = getattr(ctrl, "_lastFocusQuality", None) or {}
+            edge = quality.get("z_argmax")
+            # 0.15: AutofocusController's _AF_MIN_CONTRAST, below it the curve is flat
+            if not quality.get("peak_at_edge") or edge is None or \
+                    float(quality.get("contrast") or 0.0) < 0.15:
+                break
+            self._logger.info(f"Focus map [{group_id}]: focus beyond the window (peak at "
+                              f"its edge, Z={float(edge):.1f} um): searching again around it")
+            self.move_stage_z(float(edge), relative=False)
+            best_z = self.autofocus(**af_kwargs)
+        return best_z
+
     def _focus_point_reference_z(self, group_z):
         """Z the next focus-map point's autofocus search is centred on.
 
@@ -431,7 +461,7 @@ class FocusMapMixin:
                     self.move_stage_z(ref_z, relative=False)
                 time.sleep(0.1)  # Settle time
 
-                best_z = self.autofocus(**af_kwargs)
+                best_z = self._autofocus_following_edge(af_kwargs, group_id)
                 if best_z is not None:
                     group_z.append(float(best_z))
                     getattr(self, "_fm_found_z", []).append(float(best_z))

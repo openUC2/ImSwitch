@@ -29,11 +29,13 @@ from imswitch.imcontrol.controller.controllers.experiment_controller.overview_ap
 from imswitch.imcontrol.controller.controllers.experiment_controller.hardware_api import HardwareMixin
 from imswitch.imcontrol.controller.controllers.experiment_controller.autofocus_api import AutofocusMixin
 from imswitch.imcontrol.controller.controllers.experiment_controller.frame_saving import FrameSavingMixin
+from imswitch.imcontrol.controller.controllers.experiment_controller.flatfield_api import (
+    FlatFieldMixin)
 
 
 class ExperimentController(LabwareMixin, AshlarMixin, FastStageScanMixin, MDAMixin, FocusMapMixin,
                            OverviewRegistrationMixin, HardwareMixin, AutofocusMixin, FrameSavingMixin,
-                           ImConWidgetController):
+                           FlatFieldMixin, ImConWidgetController):
     """Linked to ExperimentWidget."""
 
     sigExperimentWorkflowUpdate = Signal()
@@ -63,9 +65,12 @@ class ExperimentController(LabwareMixin, AshlarMixin, FastStageScanMixin, MDAMix
             maxsize=32,
         )
 
-        # set default values
-        self.SPEED_Y = self.SPEED_Y_default = 20000
-        self.SPEED_X = self.SPEED_X_default = 20000
+        # set default values; the XY scan speed is the instrument's (setup
+        # experiment.scanSpeedXY), what the stage was tested at
+        scanSpeed = getattr(getattr(self._master, "experimentManager", None), "scanSpeedXY", None)
+        scanSpeed = float(scanSpeed) if scanSpeed and float(scanSpeed) > 0 else 20000.0
+        self.SPEED_Y = self.SPEED_Y_default = scanSpeed
+        self.SPEED_X = self.SPEED_X_default = scanSpeed
         self.SPEED_Z = self.SPEED_Z_default = 10000
         self.ACCELERATION = self.ACCELERATION_default = 1000000
         self.ACCELERATION_Z = self.ACCELERATION_Z_default = 1000000
@@ -203,6 +208,7 @@ class ExperimentController(LabwareMixin, AshlarMixin, FastStageScanMixin, MDAMix
         self._apply_run_settings(p)
         self._illuminationIntensities = plan.intensities  # autofocus_software looks up its channel here
         self._illuminationSources = plan.sources
+        self._illuminationPassthrough = plan.passthrough  # lights are the operator's
         self.set_led_status("rainbow")
         # Started here only if nobody streams; stopped again after the run
         # (_cleanup), or the camera kept pulling 6 MP at 60 fps over USB forever.
@@ -240,6 +246,7 @@ class ExperimentController(LabwareMixin, AshlarMixin, FastStageScanMixin, MDAMix
             initial_xyz=self._initial_experiment_position,
             keep_illumination_on=plan.keep_illumination_on, is_rgb=self.isRGB,
             illumination_kinds=plan.kinds, illumination_params=plan.params, region_meta=region_meta,
+            illumination_passthrough=plan.passthrough,
         )
 
         # 3. Execute.
@@ -275,6 +282,9 @@ class ExperimentController(LabwareMixin, AshlarMixin, FastStageScanMixin, MDAMix
         self._lockCameraForScan()
         workflow_steps, file_writers = [], []
         try:
+            # After the lock, before the writers: a reference taken now has the
+            # run's own white balance, exposure and gain.
+            self._prepareRunFlatFields(ctx)
             for t in range(ctx.n_times):
                 ctx.timepoint_index = t
                 result = self.normal_mode.execute_experiment(ctx=ctx)

@@ -251,30 +251,21 @@ export function generateCenterPointsInRect(
 
 //##################################################################################
 export function isRectInsideRect(x1, y1, width, height, rx1, ry1, rx2, ry2) {
+  // True when the well (centre x1, y1) and the selection overlap, like
+  // isCircleInsideRect: a click inside a slide selects it. It used to need a
+  // corner of the well inside the selection, so a click never selected one.
   const left = Math.min(rx1, rx2);
   const right = Math.max(rx1, rx2);
   const top = Math.min(ry1, ry2);
   const bottom = Math.max(ry1, ry2);
-
-  // Calculate the four corners based on the center (x1, y1)
-  const corners = [
-    { x: x1 - width / 2, y: y1 - height / 2 }, // Top-left
-    { x: x1 + width / 2, y: y1 - height / 2 }, // Top-right
-    { x: x1 - width / 2, y: y1 + height / 2 }, // Bottom-left
-    { x: x1 + width / 2, y: y1 + height / 2 }, // Bottom-right
-  ];
-
-  // Check if any of the corners are inside the second rectangle
-  return corners.some(
-    (corner) =>
-      corner.x >= left &&
-      corner.x <= right &&
-      corner.y >= top &&
-      corner.y <= bottom,
+  return (
+    x1 - width / 2 <= right &&
+    x1 + width / 2 >= left &&
+    y1 - height / 2 <= bottom &&
+    y1 + height / 2 >= top
   );
 }
 
-//##################################################################################
 export function isCircleInsideRect(cx, cy, r, x1, y1, x2, y2) {
   //console.log("isCircleInsideRect2", cx, cy, r, x1, y1, x2, y2);
   // Ensure x1, y1 is the top-left and x2, y2 is the bottom-right

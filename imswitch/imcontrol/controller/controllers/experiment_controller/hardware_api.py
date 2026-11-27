@@ -92,6 +92,7 @@ class HardwareMixin:
         self.ExperimentParams.isDPCpossible = False
         self.ExperimentParams.isDarkfieldpossible = False
         self.ExperimentParams.performanceMode = False
+        self.ExperimentParams.scanSpeedXY = float(getattr(self, "SPEED_X_default", 20000.0))
         for laserN in self.availableIlluminations:
             self.ExperimentParams.illuSourceMinIntensities.append(laserN.valueRangeMin)
             self.ExperimentParams.illuSourceMaxIntensities.append(laserN.valueRangeMax)

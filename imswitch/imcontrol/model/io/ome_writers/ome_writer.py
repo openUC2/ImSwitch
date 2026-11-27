@@ -337,6 +337,7 @@ class OMEWriter:
         image_name: Optional[str] = None,
         region_id: Optional[str] = None,
         tile_positions: Optional[List] = None,
+        flat_fields: Optional[Dict[str, Any]] = None,
     ):
         """
         Initialize the OME writer.
@@ -362,6 +363,10 @@ class OMEWriter:
                 region. With them the canvas is laid out in stage coordinates
                 (see ``CanvasLayout``); without, tiles go side by side by grid
                 index, which repeats every overlap at the seams.
+            flat_fields: Flat-field references (``model.flatfield.FlatField``) by
+                light name (``metadata["illuminationChannel"]``). Frames of that
+                light are corrected for the canvas and OMERO; individual TIFFs
+                stay raw.
         """
         self.file_paths = file_paths
         self.tile_h, self.tile_w = tile_shape
@@ -370,6 +375,8 @@ class OMEWriter:
         self.config = config
         self.layout = (CanvasLayout(tile_positions, self.tile_h, self.tile_w, config.pixel_size)
                        if tile_positions else None)
+        self.flat_fields = dict(flat_fields or {})
+        self._flat_skipped = set()
         self.logger = logger
         self.isRGB = isRGB
         self.omero_connection_params = omero_connection_params
@@ -588,16 +595,18 @@ class OMEWriter:
         """
         result = {}
         cfg = self.config
+        corrected = self._flat_corrected(frame, metadata)
         outputs = (
-            ("canvas", self.zarr_image is not None, self._write_zarr_tile),
-            ("individual", cfg.write_individual_tiffs, self._write_individual_tiff),
-            ("omero", cfg.write_omero and self.omero_uploader is not None, self._write_omero_tile),
+            ("canvas", self.zarr_image is not None, self._write_zarr_tile, corrected),
+            ("individual", cfg.write_individual_tiffs, self._write_individual_tiff, frame),
+            ("omero", cfg.write_omero and self.omero_uploader is not None,
+             self._write_omero_tile, corrected),
         )
-        for name, enabled, write in outputs:
+        for name, enabled, write, image in outputs:
             if not enabled:
                 continue
             t0 = time.perf_counter()
-            out = write(frame, metadata)
+            out = write(image, metadata)
             self._timing_ms[name] = self._timing_ms.get(name, 0.0) + (time.perf_counter() - t0) * 1e3
             if name == "canvas" and out and cfg.write_zarr:   # chunk info for the live viewer
                 result.update(out)
@@ -610,6 +619,26 @@ class OMEWriter:
             self.logger.info(f"Writer timing, ms/frame over last {n}: {parts}")
             self._timing_ms = {}
         return result
+
+    def _flat_corrected(self, frame, metadata: Dict[str, Any]):
+        """The frame divided by its light's flat-field reference (as it is without one)."""
+        if not self.flat_fields:
+            return frame
+        flat = self.flat_fields.get(metadata.get("illuminationChannel"))
+        if flat is None:
+            return frame
+        if not flat.matches(frame):
+            key = (tuple(frame.shape), metadata.get("illuminationChannel"))
+            if key not in self._flat_skipped and self.logger:
+                self.logger.warning(f"Flat-field reference {flat.shape} does not fit frames of "
+                                    f"{frame.shape}: written uncorrected")
+            self._flat_skipped.add(key)
+            return frame
+        t0 = time.perf_counter()
+        corrected = flat.apply(frame)
+        self._timing_ms["flatfield"] = self._timing_ms.get("flatfield", 0.0) + \
+            (time.perf_counter() - t0) * 1e3
+        return corrected
 
     def _write_zarr_tile(self, frame, metadata: Dict[str, Any]) -> Dict[str, Any]:
         """Write tile to Zarr canvas and return chunk information."""

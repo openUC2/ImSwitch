@@ -77,9 +77,50 @@ export function generateGridForBounds(
 }
 
 /**
+ * Autofocus points that areas bring along, by area id (a point's groupId, else
+ * its areaId) — e.g. the points "Detect tissue" spreads over a section, where
+ * a grid over the bounding box would land on glass.
+ */
+export function ownFocusPoints(pointList) {
+  const own = {};
+  (pointList || []).forEach((p) => {
+    const id = p.groupId || p.areaId;
+    if (id && Array.isArray(p.focusPoints) && p.focusPoints.length > 0) {
+      own[id] = p.focusPoints;
+    }
+  });
+  return own;
+}
+
+/**
+ * The planned focus points of these scan areas: an area's own points when it
+ * has them, else a rows×cols grid over its bounds.
+ *
+ * @returns Array of { x, y, groupId, groupName }.
+ */
+export function plannedPointsForAreas(scanAreas, pointList, focusMapConfig) {
+  const own = ownFocusPoints(pointList);
+  const points = [];
+  (scanAreas || []).forEach((area) => {
+    const xy = own[area.areaId]
+      ? own[area.areaId].map((p) => [p.x, p.y])
+      : generateGridForBounds(
+          area.bounds,
+          focusMapConfig.rows,
+          focusMapConfig.cols,
+          focusMapConfig.add_margin,
+        );
+    xy.forEach(([x, y]) => {
+      points.push({ x, y, groupId: area.areaId, groupName: area.areaName || area.areaId });
+    });
+  });
+  return points;
+}
+
+/**
  * Compute the planned automatic focus-grid points for the current experiment
  * selection: one rows×cols grid per scan area (same per-area semantics as the
- * backend's computeFocusMap endpoint).
+ * backend's computeFocusMap endpoint), or the area's own points.
  *
  * @returns Array of { x, y, groupId, groupName }.
  */
@@ -104,24 +145,7 @@ export function computePlannedFocusPoints(
     return [];
   }
 
-  const points = [];
-  scanAreas.forEach((area) => {
-    const grid = generateGridForBounds(
-      area.bounds,
-      focusMapConfig.rows,
-      focusMapConfig.cols,
-      focusMapConfig.add_margin,
-    );
-    grid.forEach(([x, y]) => {
-      points.push({
-        x,
-        y,
-        groupId: area.areaId,
-        groupName: area.areaName || area.areaId,
-      });
-    });
-  });
-  return points;
+  return plannedPointsForAreas(scanAreas, experimentState.pointList, focusMapConfig);
 }
 
 /** Drop the points whose key is in removedKeys (user-deleted planned points). */

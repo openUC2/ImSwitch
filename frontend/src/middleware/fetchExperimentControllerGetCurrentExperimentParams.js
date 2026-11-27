@@ -27,6 +27,7 @@ const fetchExperimentControllerGetCurrentExperimentParams = (dispatch) => {
       dispatch(parameterRangeSlice.setZStackStepSizeMin(data.zStackStepSizeMin || 1));
       dispatch(parameterRangeSlice.setZStackStepSizeMax(data.zStackStepSizeMax || 1));
       dispatch(parameterRangeSlice.setSpeed([1, 5, 10, 50, 100, 500, 1000, 10000, 20000, 100000]));
+      dispatch(parameterRangeSlice.setScanSpeedXY(data.scanSpeedXY || 20000));
 
       // New code to handle additional data fields
       dispatch(parameterRangeSlice.setIlluSources(data.illuSources || []));

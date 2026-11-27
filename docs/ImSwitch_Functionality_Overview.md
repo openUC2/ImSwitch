@@ -152,6 +152,9 @@
     captures and hardware tasks
   - Focus maps per region or well; tiles follow the focus surface
   - Prescan overview (stage map) and firmware-timed fast stage scan as job steps
+- **Slide scanning** in the WellPlate app (`docs/SLIDE_SCANNER.md`): tissue found on the
+  colour prescan (pen ink left out) becomes scan areas with autofocus points on the tissue;
+  flat-field (shading) correction from clear glass; one OME-Zarr + OME-TIFF per section
   - Stitched image per position, at stage positions or registered with Ashlar
   - Well plates from ImSwitch labware as useq plate plans
   - Pause, resume, finish, abort; operator questions

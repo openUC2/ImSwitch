@@ -71,6 +71,14 @@ class ExecutionContext:
     # by region_id. Carried once per region — see build_scan_regions.
     region_meta: Dict[str, Dict[str, Any]] = field(default_factory=dict)
 
+    # Flat-field references by light (FlatFieldMixin._prepareRunFlatFields),
+    # applied to the stitched image, and what the protocol says about them.
+    flat_fields: Dict[str, Any] = field(default_factory=dict)
+    flat_field_info: Dict[str, Any] = field(default_factory=dict)
+    # No light set in the experiment: the operator lit the sample by hand,
+    # and the run must not switch any light (the sentinel power is 1).
+    illumination_passthrough: bool = False
+
     @property
     def initial_z_position(self) -> float:
         return self.initial_xyz.get("Z", 0.0)
@@ -99,6 +107,8 @@ class ExecutionContext:
         return {
             "snake_tiles": self.snake_tiles,
             "region_meta": self.region_meta,
+            "flat_fields": self.flat_fields,
+            "flat_field_info": self.flat_field_info,
             "illumination_intensities": self.illumination_intensities,
             "illumination_sources": self.illumination_sources,
             "illumination_kinds": self.illumination_kinds,
@@ -133,6 +143,7 @@ class ExecutionContext:
             "t_pre_s": p.performance_t_pre_s,
             "t_post_s": p.performance_t_post_s,
             "keep_illumination_on": self.keep_illumination_on,
+            "illumination_passthrough": self.illumination_passthrough,
             "turn_off_between_timepoints": p.turnOffIlluminationBetweenTimepoints,
         }
 

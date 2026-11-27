@@ -1,6 +1,8 @@
 import os
+import re
 import threading
 import datetime
+import requests
 from imswitch.imcommon.model import APIExport, initLogger, dirtools, ostools
 from imswitch.imcommon.framework import Signal
 from ..basecontrollers import ImConWidgetController
@@ -8,6 +10,36 @@ from imswitch.imcontrol.model.aufgaben.storage import save_image
 from .uc2config.can_network_api import CanNetworkApiMixin
 from .uc2config.display_api import DisplayApiMixin
 
+
+# Forklift pallet upgrade (openUC2 OS): host units from the openUC2/os-rpi pallet
+PALLET_REPO = "openUC2/os-rpi"
+PALLET_UPGRADE_UNIT = "imswitch-pallet-upgrade.service"  # upgrades to the stored upgrade query
+# A branch, tag or commit name. Strict, because it becomes a systemd unit instance and a forklift
+# argument on the host; the os-rpi polkit rule accepts the same characters.
+_PALLET_VERSION = re.compile(r"[A-Za-z0-9][A-Za-z0-9._/-]{0,99}")
+PALLET_VERSIONING_FILE = "/run/versioning/forklift.yml"  # the host's, rewritten every minute
+
+
+def palletUpgradeUnit(version: str = "") -> str:
+    """The host unit that upgrades the pallet: PALLET_UPGRADE_UNIT for the stored upgrade query
+    (empty *version*), else imswitch-pallet-upgrade@<version>.service, which switches to that
+    branch, tag or commit. Raises ValueError for anything that is not such a name."""
+    if not version:
+        return PALLET_UPGRADE_UNIT
+    if not _PALLET_VERSION.fullmatch(version) or ".." in version:
+        raise ValueError(f"Not a branch, tag or commit name: {version!r}")
+    # systemd-escape for these characters ("-" -> \x2d, then "/" -> "-"); the unit's %I undoes it
+    return "imswitch-pallet-upgrade@" + version.replace("-", r"\x2d").replace("/", "-") + ".service"
+
+
+def readPalletVersioning(path: str = PALLET_VERSIONING_FILE) -> dict:
+    """The `key: "value"` lines of the host's report-versioning-forklift output (current,
+    pending, pallet, upgrade-source, upgrade, ...); {} when it is not mounted."""
+    try:
+        with open(path, errors="replace") as f:
+            return dict(re.findall(r'^([\w-]+): "(.*)"$', f.read(), re.M))
+    except OSError:
+        return {}
 
 
 def _one_frame(image):
@@ -1004,10 +1036,9 @@ class UC2ConfigController(CanNetworkApiMixin, DisplayApiMixin, ImConWidgetContro
         return True
 
     # --- Forklift pallet upgrade (openUC2 OS only, EXPERIMENTAL) -------------
-    # The upgrade runs in the host's systemd unit imswitch-pallet-upgrade.service (from the
-    # openUC2/os-rpi pallet), not in this container, because `forklift stage apply` recreates
-    # this container. We reach systemd through the host D-Bus socket mounted into the container.
-    _PALLET_UPGRADE_UNIT = "imswitch-pallet-upgrade.service"
+    # The upgrade runs in a host systemd unit from the openUC2/os-rpi pallet (palletUpgradeUnit),
+    # not in this container, because `forklift stage apply` recreates this container. We reach
+    # systemd through the host D-Bus socket mounted into the container.
 
     def _callSystemd(self, method, signature, body, path="/org/freedesktop/systemd1",
                      interface="org.freedesktop.systemd1.Manager",
@@ -1021,25 +1052,46 @@ class UC2ConfigController(CanNetworkApiMixin, DisplayApiMixin, ImConWidgetContro
                 new_method_call(address, method, signature, body), timeout=5))
 
     @APIExport(runOnUIThread=False)
-    def startPalletUpgrade(self):
+    def startPalletUpgrade(self, version: str = ""):
         """EXPERIMENTAL: run `forklift plt upgrade --force && forklift stage apply` on the host.
 
-        Returns once systemd has queued the job. The upgrade then restarts this ImSwitch
+        *version* (a branch, tag or commit of github.com/openUC2/os-rpi, e.g. "edge") switches
+        the pallet to that version instead: `forklift plt upgrade --force --allow-downgrade
+        @<version>`, which also makes it the pallet's stored upgrade query. Empty = the stored
+        query. Returns once systemd has queued the job. The upgrade then restarts this ImSwitch
         container; poll getPalletUpgradeStatus for its state and terminal output.
         """
         try:
-            self._callSystemd("StartUnit", "ss", (self._PALLET_UPGRADE_UNIT, "replace"))
-        except Exception as e:
-            self._logger.error(f"Could not start the pallet upgrade: {e}")
+            unit = palletUpgradeUnit(version.strip())
+        except ValueError as e:
             return {"status": "error", "message": str(e)}
-        return {"status": "started"}
+        try:
+            self._callSystemd("StartUnit", "ss", (unit, "replace"))
+        except Exception as e:
+            self._logger.error(f"Could not start the pallet upgrade {unit}: {e}")
+            message = str(e)
+            if version and "NoSuchUnit" in message:
+                message += (" - this OS version cannot pick the pallet version yet: run the"
+                            " command shown by hand once (Cockpit terminal or SSH)")
+            return {"status": "error", "message": message}
+        # Remembered on disk, since a successful upgrade recreates this container
+        with open(self._palletUpgradeFile("unit"), "w") as f:
+            f.write(unit)
+        return {"status": "started", "unit": unit}
 
     @APIExport(runOnUIThread=False)
     def getPalletUpgradeStatus(self):
-        """systemd state of the pallet upgrade ("activating" while it runs, then "inactive" or
-        "failed") and the last 500 lines of its terminal output."""
+        """systemd state of the last started pallet upgrade ("activating" while it runs, then
+        "inactive" or "failed"), the last 500 lines of its terminal output, and the host's
+        pallet versions from /run/versioning/forklift.yml ({} when it is not mounted): current
+        (booted), pending (after the next boot), pallet (local), upgrade-source (stored query)."""
         try:
-            (unitPath,) = self._callSystemd("LoadUnit", "s", (self._PALLET_UPGRADE_UNIT,))
+            with open(self._palletUpgradeFile("unit")) as f:
+                unit = f.read().strip()
+        except OSError:
+            unit = PALLET_UPGRADE_UNIT
+        try:
+            (unitPath,) = self._callSystemd("LoadUnit", "s", (unit,))
             ((_, state),) = self._callSystemd(
                 "Get", "ss", ("org.freedesktop.systemd1.Unit", "ActiveState"),
                 path=unitPath, interface="org.freedesktop.DBus.Properties")
@@ -1047,12 +1099,32 @@ class UC2ConfigController(CanNetworkApiMixin, DisplayApiMixin, ImConWidgetContro
             state = f"unknown: {e}"
         try:
             # Written by the unit's StandardOutput= into the bind-mounted config folder
-            with open(os.path.join(dirtools.UserFileDirs.Root, "pallet-upgrade.log"),
-                      errors="replace") as f:
+            with open(self._palletUpgradeFile("log"), errors="replace") as f:
                 log = "".join(f.readlines()[-500:])
         except OSError:
             log = ""
-        return {"state": state, "log": log}
+        return {"state": state, "log": log, "unit": unit, "versioning": readPalletVersioning()}
+
+    @APIExport(runOnUIThread=False)
+    def listPalletVersions(self):
+        """Branches and tags of github.com/openUC2/os-rpi to pick for startPalletUpgrade, from
+        the GitHub API (needs internet on the ImSwitch host): {status, branches, tags} or
+        {status: "error", message}."""
+        names = {}
+        try:
+            for kind in ("branches", "tags"):
+                response = requests.get(f"https://api.github.com/repos/{PALLET_REPO}/{kind}",
+                                        params={"per_page": 100}, timeout=10)
+                response.raise_for_status()
+                names[kind] = [item["name"] for item in response.json()]
+        except Exception as e:
+            return {"status": "error",
+                    "message": f"Could not list the versions of {PALLET_REPO}: {e}"}
+        return {"status": "success", **names}
+
+    @staticmethod
+    def _palletUpgradeFile(ext):
+        return os.path.join(dirtools.UserFileDirs.Root, f"pallet-upgrade.{ext}")
 
     def _lightsOff(self):
         """Switch off every laser/LED channel; errors are logged, not raised."""

@@ -935,13 +935,27 @@ class CameraHIK:
             self.__logger.warning(f"Failed to set pixel format 0x{format:x}, ret=0x{ret:x}")
 
     def setBinning(self, binning=1):
+        """Square hardware binning. HikCamManager stops and restarts acquisition around it.
+
+        Newer models follow GenICam SFNC (BinningHorizontal/Vertical, some behind
+        BinningSelector, e.g. MV-CS200-10UC), older ones have BinningX/Y. Some answer
+        MV_E_GC_GENERIC although the value was applied, so the result is read back.
+        """
         try:
-            ret = self.camera.MV_CC_SetIntValue("BinningX", binning)
-            if ret != 0:
-                self.__logger.warning(f"BinningX set failed ret=0x{ret:x}")
-            ret = self.camera.MV_CC_SetIntValue("BinningY", binning)
-            if ret != 0:
-                self.__logger.warning(f"BinningY set failed ret=0x{ret:x}")
+            binning = int(binning)
+            if hasattr(self.camera, "MV_CC_SetEnumValueByString"):
+                # absent on older models, which is fine
+                self.camera.MV_CC_SetEnumValueByString("BinningSelector", "Sensor")
+            actual = []
+            for node, legacy in (("BinningHorizontal", "BinningX"),
+                                 ("BinningVertical", "BinningY")):
+                if self.camera.MV_CC_SetIntValue(node, binning) != 0:
+                    self.camera.MV_CC_SetIntValue(legacy, binning)
+                read = self._read_int_safe(node)
+                actual.append(read if read is not None else self._read_int_safe(legacy))
+            if None not in actual and actual != [binning, binning]:
+                self.__logger.warning(f"Binning {binning}x{binning} requested, "
+                                      f"camera reports {actual[0]}x{actual[1]}")
 
             # Changing binning shifts WidthMax/HeightMax to the binned resolution.
             # The camera keeps the old (now out-of-range) Width/Height values and
@@ -955,13 +969,23 @@ class CameraHIK:
             self.SensorWidth = mWidth.nCurValue
             self.SensorHeight = mHeight.nCurValue
 
-            self.binning = binning
+            self.binning = actual[0] or binning   # the camera's word when it gives one
             self.__logger.debug(
-                f"Binning set to {binning}x{binning}, "
+                f"Binning set to {self.binning}x{self.binning}, "
                 f"sensor size {self.SensorWidth}x{self.SensorHeight}"
             )
         except Exception as e:
             self.__logger.error(e)
+
+    def _read_int_safe(self, feature: str) -> Optional[int]:
+        """A GenICam integer feature, or None when the camera does not report it."""
+        try:
+            val = MVCC_INTVALUE()
+            if self.camera.MV_CC_GetIntValue(feature, val) == 0 and val.nCurValue > 0:
+                return int(val.nCurValue)
+        except Exception:
+            pass
+        return None
 
     def getLast(self,
                 returnFrameNumber: bool = False,

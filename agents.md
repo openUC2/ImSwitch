@@ -651,7 +651,9 @@ Safe to read:
   identity. Empty port = ImSwitch's own board over the open link; another port is opened and
   may reset that board.
 - `getFirmwareUpdateStatus`, `getFirmwareUpdatePrompt`, `getFirmwareCheckOnConnect`
-- `getPalletUpgradeStatus()` — systemd state + terminal output of the OS pallet upgrade
+- `getPalletUpgradeStatus()` — systemd state + terminal output of the OS pallet upgrade, and the
+  host's pallet versions (`versioning`: current, pending, stored upgrade query);
+  `listPalletVersions()` — branches and tags of github.com/openUC2/os-rpi (GitHub API)
 
 Confirm before calling:
 
@@ -667,9 +669,12 @@ Confirm before calling:
 - Lifecycle: `espRestart`, `restartCANDevice`, `stopImSwitch`, `restartImSwitch`,
   `powerOffHost(reboot)` (POST; stops motors, lights off, then logind power-off/reboot on the host),
   `moveToSampleMountingPosition`
-- **OS upgrade (experimental, openUC2 OS only):** `startPalletUpgrade()` starts the host unit
+- **OS upgrade (experimental, openUC2 OS only):** `startPalletUpgrade(version)` starts the host unit
   `imswitch-pallet-upgrade.service` over the mounted D-Bus socket, which runs
-  `forklift plt upgrade --force && forklift stage apply` and recreates the ImSwitch container
+  `forklift plt upgrade --force && forklift stage apply` and recreates the ImSwitch container;
+  with a `version` (branch, tag or commit of os-rpi, e.g. `edge`) it starts
+  `imswitch-pallet-upgrade@<version>.service` instead: `forklift plt upgrade --force
+  --allow-downgrade @<version>`, which also stores that version as the upgrade query
 - **Firmware — highest risk:** `flashMasterFirmwareUSB(port, match, baud, firmware_filename)`,
   `cancelUSBFlash`, `sendCanAddress`, `testDeviceAction` (moves a freshly flashed motor),
   `reassignCANId(new_id, mac, target)`, `startCANStreamingOTA(can_id, firmware_url, baud)`,

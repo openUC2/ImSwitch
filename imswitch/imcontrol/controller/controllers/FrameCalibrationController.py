@@ -1206,7 +1206,12 @@ class FrameCalibrationController(ImConWidgetController):
                          expected="one clear peak of the focus metric (the rays around the via come into focus)",
                          measured="no clear peak", ok=False)
             if not s["manualFocusFallback"]:
-                raise StepError("no focus found: the focus metric shows no clear peak (light, exposure, plate?)")
+                # FRAME 2026-11-26: the turret homed to the end where the 20x sits while
+                # objectivePositions counted slot 0 (4x) from the other end - the sweep ran
+                # with the 20x under the pinhole and found nothing in the 4x range.
+                raise StepError(f"no focus found: the focus metric shows no clear peak (light, exposure, plate? "
+                                f"Is objective {slot} really on the optical axis? Its objectivePositions entry "
+                                f"counts from where homing leaves the turret, A = 0)")
             z_end = self._at("Z")
             self._waitUser("No clear focus found. Focus on the " + ("plate (the rays around the centre via)"
                            if self._T()["focusTexture"] else "pinhole of the slide in slot 1")

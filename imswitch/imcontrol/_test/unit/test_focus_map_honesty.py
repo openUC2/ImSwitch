@@ -104,3 +104,20 @@ if __name__ == "__main__":
             fn()
             print(f"ok  {name}")
     print("all passed")
+
+
+def test_focus_point_search_starts_from_what_the_points_found_not_from_the_last_one():
+    """Each point's autofocus window is centred on the median Z found so far.
+
+    FRAME 2026-11-26: every search started where the previous one left the
+    stage - after a rejected point that is the edge of its window - and a wrong
+    plane (dust/ink on another glass face) walked the next windows off the tissue.
+    """
+    from imswitch.imcontrol.controller.controllers.experiment_controller.focus_map_api import FocusMapMixin
+
+    m = FocusMapMixin.__new__(FocusMapMixin)
+    m._fm_anchor_z, m._fm_found_z = 7456.0, []
+    assert m._focus_point_reference_z([]) == 7456.0            # nothing found yet: the operator's focus
+    m._fm_found_z = [7300.0, 7400.0, 7350.0]
+    assert m._focus_point_reference_z([]) == 7350.0            # new region: what the earlier ones found
+    assert m._focus_point_reference_z([7517.0, 7298.0, 7310.0]) == 7310.0   # one outlier cannot drag it

@@ -8,6 +8,7 @@ from .DetectorManager import DetectorManager, DetectorAction, DetectorNumberPara
 _HARDWARE_READABLE_PARAMS = (
     'exposure', 'gain', 'blacklevel', 'exposure_mode', 'frame_rate',
     'frame_number', 'image_width', 'image_height', 'trigger_source',
+    'awb_mode', 'red_gain', 'blue_gain',
 )
 
 
@@ -146,6 +147,22 @@ class HikCamManager(DetectorManager):
             'Camera pixel size': DetectorNumberParameter(group='Miscellaneous', value=pixelSize,
                                                 valueUnits='µm', editable=True)
             }
+        # Colour cameras: white balance through SettingsController.setWhiteBalance /
+        # setColourGains. A scan locks it (see ExperimentController) so the colour
+        # of a stained slide does not change from tile to tile.
+        self._isRGB = bool(isRGB) and getattr(self._camera, "get_white_balance_mode", None) is not None
+        if self._isRGB:
+            awb = self._camera.get_white_balance_mode() or 'manual'
+            parameters.update({
+                'awb_mode': DetectorListParameter(group='Color', value=awb,
+                                                  options=['auto', 'manual', 'once'], editable=True),
+                'red_gain': DetectorNumberParameter(group='Color',
+                                                    value=self._camera.get_balance_ratio('red') or 1.0,
+                                                    valueUnits='arb.u.', editable=True),
+                'blue_gain': DetectorNumberParameter(group='Color',
+                                                     value=self._camera.get_balance_ratio('blue') or 1.0,
+                                                     valueUnits='arb.u.', editable=True),
+            })
 
         # Prepare actions
         actions = {
@@ -233,6 +250,15 @@ class HikCamManager(DetectorManager):
             raise AttributeError(f'Non-existent parameter "{name}" specified')
 
         value = self._camera.setPropertyValue(name, value)
+        if name == 'awb_mode':
+            # "once" measures and locks: show the gains it settled on.
+            for gain in ('red_gain', 'blue_gain'):
+                measured = self._camera.getPropertyValue(gain)
+                if measured is not None:
+                    self._DetectorManager__parameters[gain].value = measured
+            current = self._camera.getPropertyValue('awb_mode')
+            if current is not None:
+                self._DetectorManager__parameters['awb_mode'].value = current
         return value
 
     def getParameter(self, name):

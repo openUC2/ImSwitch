@@ -3,6 +3,7 @@
 Mixed into ExperimentController; the methods keep their state on ``self``.
 """
 import time
+import numpy as np
 from fastapi import HTTPException
 from typing import List, Optional, Dict, Any, Tuple
 
@@ -58,6 +59,13 @@ class FocusMapMixin:
         self._focus_map_config = config
         af_kwargs = af_kwargs or self._focus_map_af_kwargs()
         self.focus_map_manager.clear_abort()
+        # Where every point's autofocus search is centred (see _focus_point_reference_z):
+        # the operator's focus when the phase starts, then what the points found.
+        try:
+            self._fm_anchor_z = float(self.mStage.getPosition().get("Z"))
+        except Exception:
+            self._fm_anchor_z = None
+        self._fm_found_z = []
 
         if not areas:
             self._logger.warning("Focus map: no areas found – skipping")
@@ -339,6 +347,24 @@ class FocusMapMixin:
                 continue
         return explicit
 
+    def _focus_point_reference_z(self, group_z):
+        """Z the next focus-map point's autofocus search is centred on.
+
+        Each search used to start wherever the previous one left the stage. After
+        a rejected point that is the edge of its window, and on a slide with dust
+        or marker ink on another glass face a single wrong plane walked the
+        following windows away from the tissue (FRAME 2026-11-26: 7517 / 7298 µm
+        alternating in one 4x5 mm section). The median of what this region found,
+        else of the earlier regions, else the focus the phase started from, is a
+        reference no single point can drag.
+        """
+        if group_z:
+            return float(np.median(group_z))
+        found = getattr(self, "_fm_found_z", None)
+        if found:
+            return float(np.median(found))
+        return getattr(self, "_fm_anchor_z", None)
+
     def _compute_focus_map_for_group(self, group_id: str, group_name: str,
                                      bounds: Dict[str, float],
                                      config: FocusMapConfig,
@@ -389,6 +415,7 @@ class FocusMapMixin:
             )
         af_kwargs = af_kwargs or self._focus_map_af_kwargs()
         self._logger.info(f"Focus map [{group_id}]: measuring {len(grid)} points")
+        group_z = []
 
         # Measure each grid point
         for i, (gx, gy) in enumerate(grid):
@@ -399,9 +426,15 @@ class FocusMapMixin:
             try:
                 # Move stage to measurement position
                 self.move_stage_xy(posX=gx, posY=gy, relative=False)
+                ref_z = self._focus_point_reference_z(group_z)
+                if ref_z is not None:
+                    self.move_stage_z(ref_z, relative=False)
                 time.sleep(0.1)  # Settle time
 
                 best_z = self.autofocus(**af_kwargs)
+                if best_z is not None:
+                    group_z.append(float(best_z))
+                    getattr(self, "_fm_found_z", []).append(float(best_z))
 
                 if best_z is None:
                     # SKIP the point. Using the stage position instead would

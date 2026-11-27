@@ -1100,12 +1100,17 @@ class RecordingController(ImConWidgetController):
             if resizeFactor < 1:
                 image = self.resizeImage(image, resizeFactor)
 
-        # using an in-memory image
-        im = Image.fromarray(image)
+        # An 8-bit PNG: colour stays colour (convert("L") made every RGB snap grey),
+        # and a 12/16-bit frame is scaled to its maximum instead of clipped at 255.
+        image = np.asarray(image)
+        if image.dtype != np.uint8:
+            hi = float(image.max()) if image.size else 0.0
+            image = (image.astype(np.float32) * (255.0 / hi if hi > 0 else 1.0)).clip(0, 255).astype(np.uint8)
+        im = Image.fromarray(np.ascontiguousarray(image),
+                             "RGB" if image.ndim == 3 and image.shape[-1] == 3 else "L")
 
         # save image to an in-memory bytes buffer
         with python_io.BytesIO() as buf:
-            im = im.convert("L")  # convert image to 'L' mode
             im.save(buf, format="PNG")
             im_bytes = buf.getvalue()
 

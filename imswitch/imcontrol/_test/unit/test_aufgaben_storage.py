@@ -169,13 +169,62 @@ def test_experiment_writer_output_is_valid_ngff(tmp_path, rgb):
 
     mosaic = tmp_path / "run" / "stitched.ome.tif"   # the canvas exported, same metadata model
     pixels = ome_types.from_tiff(mosaic).images[0].pixels
-    names = ["LED_rgb_r", "LED_rgb_g", "LED_rgb_b", "Laser488_rgb_r", "Laser488_rgb_g",
-             "Laser488_rgb_b"] if rgb else ["LED", "Laser488"]
-    assert [c.name for c in pixels.channels] == names
+    # A colour canvas exports as one interleaved RGB channel per light source
+    # (SamplesPerPixel 3), which is what brightfield/pathology viewers open.
+    assert [c.name for c in pixels.channels] == ["LED", "Laser488"]
+    assert [c.samples_per_pixel for c in pixels.channels] == [3 if rgb else 1] * 2
     assert pixels.size_c == (6 if rgb else 2) and pixels.physical_size_z == 3.0
     assert pixels.planes[0].position_x == 80.0
     with tifffile.TiffFile(mosaic) as f:
-        assert f.series[0].shape[-2:] == (128, 160)
+        shape = f.series[0].shape
+        assert (shape[-3:-1] if rgb else shape[-2:]) == (128, 160)
+        assert f.pages[0].photometric == (tifffile.PHOTOMETRIC.RGB if rgb
+                                          else tifffile.PHOTOMETRIC.MINISBLACK)
+        if rgb:   # tile (1, 1), channel 1, z 1, every sample
+            assert f.series[0].asarray()[1, 1, 64, 80].tolist() == [16] * 3
+
+
+@pytest.mark.parametrize("rgb", [False, True])
+def test_experiment_canvas_is_laid_out_in_stage_coordinates(tmp_path, rgb):
+    """With tile positions the canvas follows the stage: overlaps are not repeated.
+
+    A 3x2 scan with 20 % overlap of a known scene must give back the scene
+    itself, every canvas pixel written exactly once, and a translation that is
+    the stage position of the top-left pixel.
+    """
+    from imswitch.imcontrol.model.io.ome_writers.ome_writer import (
+        CanvasLayout, OMEFileStorePaths, OMEWriter, OMEWriterConfig,
+    )
+
+    px, th, tw = 0.5, 60, 80
+    step_x, step_y = tw * px * 0.8, th * px * 0.8
+    positions = [(1000.0 + ix * step_x, 2000.0 + iy * step_y) for iy in range(2) for ix in range(3)]
+    layout = CanvasLayout(positions, th, tw, px)
+    assert (layout.height, layout.width) == (th + int(step_y / px), tw + 2 * int(step_x / px))
+    coverage = np.zeros((layout.height, layout.width), int)
+    for x, y in positions:
+        sy, sx, y0, x0 = layout.placement(x, y)
+        coverage[y0:y0 + sy.stop - sy.start, x0:x0 + sx.stop - sx.start] += 1
+    assert coverage.min() == coverage.max() == 1
+
+    rng = np.random.default_rng(1)
+    shape = (layout.height, layout.width) + ((3,) if rgb else ())
+    scene = rng.integers(0, 255, shape).astype(np.uint8 if rgb else np.uint16)
+    cfg = OMEWriterConfig(write_zarr=True, pixel_size=px, channel_names=["BF"])
+    writer = OMEWriter(OMEFileStorePaths(str(tmp_path / "slide")), (th, tw), (3, 2),
+                       (1000.0, 2000.0, step_x, step_y), cfg, isRGB=rgb, tile_positions=positions)
+    for x, y in positions:
+        y0, x0 = int(round((y - 2000.0) / px)), int(round((x - 1000.0) / px))
+        writer.write_frame(scene[y0:y0 + th, x0:x0 + tw], {"x": x, "y": y})
+    writer.finalize()
+
+    group = zarr.open_group(writer.store, mode="r")
+    Image04.from_zarr(group)
+    canvas = group["0"][0, :, 0]
+    assert np.array_equal(np.moveaxis(canvas, 0, -1) if rgb else canvas[0], scene)
+    transforms = group.attrs["multiscales"][0]["datasets"][0]["coordinateTransformations"]
+    assert transforms[0]["scale"][-2:] == [px, px]
+    assert transforms[1]["translation"][-2:] == [2000.0 - th * px / 2, 1000.0 - tw * px / 2]
 
 
 def test_large_ome_tiff_export_streams_tiles_and_keeps_the_pyramid(tmp_path):

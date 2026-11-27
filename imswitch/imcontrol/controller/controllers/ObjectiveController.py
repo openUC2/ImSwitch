@@ -103,6 +103,8 @@ class ObjectiveController(LiveUpdatedController):
         except Exception as e:
             self._logger.warning(f"Could not initialize objective motor control: {e}")
             self._hasMotor = False
+        if self._hasMotor:
+            self._checkTurretHomingConfig()
 
         # Initialize objective state
         if self._configManager.isActive and self._hasMotor:
@@ -301,14 +303,45 @@ class ObjectiveController(LiveUpdatedController):
         self._logger.info("Starting objective calibration (homing axis A)...")
 
         try:
-            # Home axis A using ESP32StageManager
-            self._positioner.home_a(isBlocking=isBlocking)
+            # Home axis A using ESP32StageManager. Without overrides it homes with
+            # the positioner's homeDirectionA / homeEndstoppolarityA (the objective
+            # block's homeDirection is not used; see _checkTurretHomingConfig).
+            if (homeDirection is not None or homePolarity is not None) and hasattr(self._positioner, "doHome"):
+                self._positioner.doHome("A", isBlocking=isBlocking, homeDirection=homeDirection,
+                                        homeEndstoppolarity=homePolarity)
+            else:
+                self._positioner.home_a(isBlocking=isBlocking)
             self._isHomed = True
             self._logger.info("Objective homing completed successfully")
         except Exception as e:
             self._logger.error(f"Objective homing failed: {e}", exc_info=True)
             self._isHomed = False
         self._currentObjective = None
+
+    def _checkTurretHomingConfig(self):
+        """Warn when the setup describes the turret's home twice, differently.
+
+        Homing A always uses the positioner's homeDirectionA; objectivePositions
+        count from where that leaves the turret (A = 0). The objective block's
+        homeDirection is not used for it. When the two directions disagree, a
+        setup written for the objective block's end puts the wrong objective on
+        the axis after every homing (FRAME berry-muscle 2026-11-26: the 20x sat
+        at A = 0 while slot 0, the 4x, was configured at A = 0).
+        """
+        try:
+            hp = (getattr(self._positioner, "homeParams", None) or {}).get("A") or {}
+            positioner_dir = hp.get("direction")
+            objective_dir = getattr(self._configManager, "homeDirection", None)
+            if positioner_dir is None or objective_dir is None:
+                return
+            if (positioner_dir > 0) != (objective_dir > 0):
+                self._logger.warning(
+                    f"Turret homing: positioner homeDirectionA={positioner_dir:+d} but "
+                    f"objective.homeDirection={objective_dir:+d}. Homing uses the positioner's; "
+                    f"objectivePositions {list(self._objectivePositions)} must count from that "
+                    f"home (A = 0). Check which objective sits on the axis after homing.")
+        except Exception as e:  # diagnostics only
+            self._logger.debug(f"Turret homing config check failed: {e}")
 
     @APIExport(runOnUIThread=True)
     def moveToObjective(self, slot: int, skipZ: bool = False):

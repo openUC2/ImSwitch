@@ -6,7 +6,7 @@ import createAxiosInstance from "./createAxiosInstance";
  * This starts the AF in a background thread on the backend.
  *
  * @param {Object} params - Autofocus parameters
- * @param {number} [params.rangez=100] - Z range ±µm from current position
+ * @param {number} [params.rangez=100] - Full Z range in µm, centred on the current position (scans ±rangez/2)
  * @param {number} [params.resolutionz=10] - Z step size (µm)
  * @param {number} [params.defocusz=0] - Defocus offset
  * @param {number} [params.tSettle=0.1] - Settle time after each Z step (s)

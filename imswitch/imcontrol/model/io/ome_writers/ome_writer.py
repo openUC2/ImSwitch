@@ -105,6 +105,95 @@ class OMEWriterConfig:
             self.channel_colors = [default_colors[i % len(default_colors)] for i in range(self.n_channels)]
 
 
+class CanvasLayout:
+    """Where each tile of a scan region lands on the stitched canvas.
+
+    Tiles are placed at their stage position (µm) divided by the pixel size, so
+    the canvas is in stage coordinates: a 10 % overlap no longer shows up twice
+    at every seam, and the canvas translation is the stage position of its
+    top-left pixel. Each tile keeps the part of its frame nearer to its own
+    centre than to a neighbour's (half of every overlap), so neighbours meet
+    exactly; at the edge of the region the whole frame is kept.
+
+    Positions are the requested tile centres in µm. Neighbours are found on the
+    grid the positions span; a region that is not a grid (scattered points) just
+    keeps every frame whole.
+    """
+
+    def __init__(self, positions, tile_h: int, tile_w: int, pixel_size_um: float):
+        pts = [(float(x), float(y)) for x, y in positions] or [(0.0, 0.0)]
+        self.px = float(pixel_size_um) if pixel_size_um and pixel_size_um > 0 else 1.0
+        self.tile_h, self.tile_w = int(tile_h), int(tile_w)
+        xs = sorted({round(x, 3) for x, _ in pts})
+        ys = sorted({round(y, 3) for _, y in pts})
+        self.x_min, self.y_min = xs[0], ys[0]
+        self.height = int(round((ys[-1] - self.y_min) / self.px)) + self.tile_h
+        self.width = int(round((xs[-1] - self.x_min) / self.px)) + self.tile_w
+        # Grid columns/rows by position; a step smaller than a micron is jitter.
+        self._col = {x: i for i, x in enumerate(_cluster(xs))}
+        self._row = {y: i for i, y in enumerate(_cluster(ys))}
+        self._centre = {}
+        for x, y in pts:
+            key = (self._col_of(x), self._row_of(y))
+            self._centre.setdefault(key, (x, y))
+
+    def _col_of(self, x: float) -> int:
+        return self._col[min(self._col, key=lambda c: abs(c - x))]
+
+    def _row_of(self, y: float) -> int:
+        return self._row[min(self._row, key=lambda r: abs(r - y))]
+
+    def _to_px(self, x: float, y: float):
+        """Canvas pixel of the tile centre (x, y) µm, as floats."""
+        return ((x - self.x_min) / self.px + self.tile_w / 2.0,
+                (y - self.y_min) / self.px + self.tile_h / 2.0)
+
+    def origin_um(self):
+        """Stage position (x, y) of the canvas' top-left pixel corner."""
+        return (self.x_min - self.tile_w * self.px / 2.0, self.y_min - self.tile_h * self.px / 2.0)
+
+    def placement(self, x: float, y: float, frame_h: Optional[int] = None,
+                  frame_w: Optional[int] = None):
+        """``(sy, sx, y0, x0)``: the slice of the frame to keep and where it goes.
+
+        The frame is centred on its position; a frame of another size than the
+        planned tile (ROI or binning changed mid-run) still lands where it was taken.
+        """
+        frame_h, frame_w = int(frame_h or self.tile_h), int(frame_w or self.tile_w)
+        cx, cy = self._to_px(x, y)
+        fx0 = int(round(cx - frame_w / 2.0))
+        fy0 = int(round(cy - frame_h / 2.0))
+        col, row = self._col_of(x), self._row_of(y)
+
+        def boundary(neighbour, axis, default):
+            centre = self._centre.get(neighbour)
+            if centre is None:
+                return default
+            own = cx if axis == 0 else cy
+            other = self._to_px(*centre)[axis]
+            return int(round((own + other) / 2.0))
+
+        kx0 = boundary((col - 1, row), 0, fx0)
+        kx1 = boundary((col + 1, row), 0, fx0 + frame_w)
+        ky0 = boundary((col, row - 1), 1, fy0)
+        ky1 = boundary((col, row + 1), 1, fy0 + frame_h)
+        # Inside the frame and the canvas; a gap between tiles stays empty.
+        kx0, kx1 = max(kx0, fx0, 0), min(kx1, fx0 + frame_w, self.width)
+        ky0, ky1 = max(ky0, fy0, 0), min(ky1, fy0 + frame_h, self.height)
+        if kx1 <= kx0 or ky1 <= ky0:
+            return None
+        return (slice(ky0 - fy0, ky1 - fy0), slice(kx0 - fx0, kx1 - fx0), ky0, kx0)
+
+
+def _cluster(values, tolerance: float = 1.0):
+    """Sorted values with neighbours closer than ``tolerance`` merged (first kept)."""
+    out = []
+    for v in values:
+        if not out or v - out[-1] > tolerance:
+            out.append(v)
+    return out
+
+
 def _sanitize_region_tag(region_id: Optional[str]) -> str:
     """Region id reduced to what a filename can carry, or "" when unset."""
     return "".join(c for c in (region_id or "") if c.isalnum())[:24]
@@ -247,6 +336,7 @@ class OMEWriter:
         well_metadata: Optional[Dict[str, Any]] = None,
         image_name: Optional[str] = None,
         region_id: Optional[str] = None,
+        tile_positions: Optional[List] = None,
     ):
         """
         Initialize the OME writer.
@@ -268,12 +358,18 @@ class OMEWriter:
                 ``well`` group attrs and a custom ``imswitch_well`` block are emitted.
             image_name: Optional clean image name (e.g. the position/area name) used
                 for OME/OMERO image metadata. Falls back to the output file basename.
+            tile_positions: The (x, y) stage positions (µm) of every tile of the
+                region. With them the canvas is laid out in stage coordinates
+                (see ``CanvasLayout``); without, tiles go side by side by grid
+                index, which repeats every overlap at the seams.
         """
         self.file_paths = file_paths
         self.tile_h, self.tile_w = tile_shape
         self.nx, self.ny = grid_shape
         self.x_start, self.y_start, self.x_step, self.y_step = grid_geometry
         self.config = config
+        self.layout = (CanvasLayout(tile_positions, self.tile_h, self.tile_w, config.pixel_size)
+                       if tile_positions else None)
         self.logger = logger
         self.isRGB = isRGB
         self.omero_connection_params = omero_connection_params
@@ -321,14 +417,25 @@ class OMEWriter:
 
     TIMING_LOG_EVERY = 100
 
-    LARGE_SCAN_CANVAS_BYTES = 2 * 1024 ** 3      # 2 GiB, any stitched canvas
+    # Above this a region keeps only individual tiles (no canvas). A tissue section
+    # at 4x is ~6-10 GB as an RGB canvas; 2 GiB dropped the stitched image of every
+    # histology scan. Memory is bounded either way (zarr chunks, band-wise pyramid
+    # and TIFF export); what grows is the finalize time on slow storage.
+    # IMSWITCH_MAX_CANVAS_GIB overrides it (e.g. 2 on a Pi with an SD card).
+    LARGE_SCAN_CANVAS_BYTES = int(float(os.environ.get("IMSWITCH_MAX_CANVAS_GIB", "16")) * 1024 ** 3)
+
+    def canvas_yx(self):
+        """(height, width) of the stitched canvas in pixels."""
+        if self.layout is not None:
+            return self.layout.height, self.layout.width
+        return int(self.ny) * int(self.tile_h), int(self.nx) * int(self.tile_w)
 
     def canvas_bytes(self) -> int:
         """Size of one full stitched canvas for this writer's geometry."""
         per_px = 3 if self.isRGB else 2
+        h, w = self.canvas_yx()
         return (int(self.config.n_time_points) * int(self.config.n_channels)
-                * int(self.config.n_z_planes) * int(self.ny) * int(self.tile_h)
-                * int(self.nx) * int(self.tile_w) * per_px)
+                * int(self.config.n_z_planes) * h * w * per_px)
 
     def _apply_large_scan_policy(self):
         size = self.canvas_bytes()
@@ -364,16 +471,25 @@ class OMEWriter:
         if self.isRGB:
             names = [f"{n}_rgb_{c}" for n in names for c in "rgb"]
         px = cfg.pixel_size
+        height, width = self.canvas_yx()
+        if self.layout is not None:
+            ox, oy = self.layout.origin_um()
+            # Tiles no longer start on chunk borders; 1024² chunks keep the
+            # read-modify-write at a tile's edge small (a whole-tile chunk is
+            # 6 MP per plane) and are what viewers expect.
+            chunks = (min(height, 1024), min(width, 1024))
+        else:
+            ox, oy = self.x_start - self.tile_w * px / 2, self.y_start - self.tile_h * px / 2
+            chunks = (int(self.tile_h), int(self.tile_w))
         return ImageSpec(
             shape=(int(cfg.n_time_points), int(cfg.n_channels) * samples, int(cfg.n_z_planes),
-                   int(self.ny * self.tile_h), int(self.nx * self.tile_w)),
+                   int(height), int(width)),
             dtype="uint8" if self.isRGB else "uint16", pixel_size_um=px,
             z_step_um=cfg.pixel_size_z, t_step_s=cfg.time_interval,
-            origin_um=(self.x_start - self.tile_w * px / 2, self.y_start - self.tile_h * px / 2,
-                       cfg.z_start),
+            origin_um=(ox, oy, cfg.z_start),
             channel_names=names, channel_colors=[] if self.isRGB else list(cfg.channel_colors or []),
             name=self._image_name or os.path.basename(self.file_paths.base_dir),
-            chunks_yx=(int(self.tile_h), int(self.tile_w)))
+            chunks_yx=chunks)
 
     def _setup_zarr_store(self):
         """One NGFF image per writer: the stitched canvas of this region.
@@ -512,8 +628,21 @@ class OMEWriter:
         z_idx = min(z_idx, self.config.n_z_planes - 1)
 
         # Calculate canvas coordinates
-        y0, y1 = iy * self.tile_h, (iy + 1) * self.tile_h
-        x0, x1 = ix * self.tile_w, (ix + 1) * self.tile_w
+        if self.layout is not None:
+            if frame.shape[:2] != (self.tile_h, self.tile_w) and not getattr(self, "_warned_shape", False):
+                self._warned_shape = True
+                if self.logger:
+                    self.logger.warning(f"Frame {frame.shape[:2]} differs from the planned tile "
+                                        f"{(self.tile_h, self.tile_w)}; placed by its centre")
+            place = self.layout.placement(metadata["x"], metadata["y"], *frame.shape[:2])
+            if place is None:
+                return {}
+            sy, sx, y0, x0 = place
+            frame = frame[sy, sx]
+            y1, x1 = y0 + frame.shape[0], x0 + frame.shape[1]
+        else:
+            y0, y1 = iy * self.tile_h, (iy + 1) * self.tile_h
+            x0, x1 = ix * self.tile_w, (ix + 1) * self.tile_w
 
         # RGB tiles fill three channels; a stray 2-D frame on an RGB canvas is
         # copied to all three, a stray 3-D frame on a mono canvas becomes luminance.

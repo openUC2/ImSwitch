@@ -57,6 +57,18 @@ it) and the taught plate origins.
 Network: the workcell needs to reach the port (gRPC over TCP) and, for discovery, mDNS
 (UDP 5353 multicast). Guest Wi-Fi, VPNs and VLANs often block multicast; connect by address then.
 
+Discovery announces, on each network interface, that interface's own address
+(`DiscoveryConfig.network_interfaces` = all non-loopback IPv4 addresses). Without it the library
+announced `127.0.0.1` for a server bound to `0.0.0.0`, and UniteLabs GroundControl on another
+computer listed the FRAME as online (its probe falls back to the sender's address) but sent every
+request to itself (`ECONNREFUSED 127.0.0.1:50052`). GroundControl keeps the connection and the
+feature definitions it saw first: after an update, quit and reopen it.
+
+GroundControl has no Swagger page. The browsable Swagger UI is the REST API of a UniteLabs
+Platform tenant (cloud, or UniteLabs Desktop on premises), set up by UniteLabs; the FRAME shows up
+there once it is connected to the tenant. ImSwitch's own HTTP API has Swagger at
+`/imswitch/api/docs`.
+
 ## Features
 
 All positions are µm in the ImSwitch user frame (the frame of `getPositionerPositions`), except
@@ -229,5 +241,13 @@ the client tutorial above and the running server:
   treats a 0 s timeout as expired and only notices expiry on the next read; lock metadata on a
   covered feature is required even when unlocked; the Connection Configuration Service needs a
   config file to save to.
+- Discovery notes for UniteLabs: with no `network_interfaces`, a server on `0.0.0.0` announces
+  `find_ip_addresses("0.0.0.0")`, which is `[<LAN>, "127.0.0.1"]` or only `127.0.0.1` when the host
+  name does not resolve. GroundControl 1.39 stores the `127.0.0.1` A record; its online probe falls
+  back to the sender's address, but a cached client does not, and two servers announcing
+  `127.0.0.1:50052` share one entry in its address lookup.
+- On an ESP32 stage `moveToSampleLoadingPosition` moves X, Y and Z in one command. Teach the
+  loading position with Z at a safe height; an untaught position is the device origin (0, 0, 0),
+  where homing ends.
 - No plate-presence sensor: LabwareDelivered is taken on trust.
 - Not tested on hardware yet; tested against the virtual microscope.

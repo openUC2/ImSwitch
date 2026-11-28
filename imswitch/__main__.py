@@ -11,6 +11,18 @@ from imswitch.config import get_config
 # python -m imswitch --http-port 8001 --config-folder /Users/bene --config-file None
 
 
+def _port_in_use(port: int) -> bool:
+    """True when something listens on ``port`` (tested as uvicorn binds it)."""
+    import socket
+    with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as s:
+        s.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
+        try:
+            s.bind(("0.0.0.0", int(port)))
+        except OSError:
+            return True
+    return False
+
+
 def main(default_config:str=None, http_port:int=None, ssl:bool=None, config_folder:str=None,
          data_folder: str=None, scan_ext_data_folder:bool=None, ext_data_folder:str=None, with_kernel:bool=None, jupyter_port:int=None,
          default_firmware_route:str="http://localhost/firmware"):
@@ -106,7 +118,11 @@ def main(default_config:str=None, http_port:int=None, ssl:bool=None, config_fold
                 # Handle special config file validation
                 if hasattr(args, 'config_file') and args.config_file:
                     if isinstance(args.config_file, str) and args.config_file.find("json") >= 0:
-                        config.default_config = args.config_file
+                        # Absolute when it exists from here: a relative path was looked
+                        # up in the setups folder and saved there (configfiletools).
+                        config.default_config = (os.path.abspath(args.config_file)
+                                                 if os.path.isfile(args.config_file)
+                                                 else args.config_file)
                     else:
                         config.default_config = None
 
@@ -160,7 +176,15 @@ def main(default_config:str=None, http_port:int=None, ssl:bool=None, config_fold
             logger.info(f'External mount paths: {config.ext_data_folder}')
 
 
-        # TODO: check if port is already in use
+        # Another server on this port (a second ImSwitch) holds the hardware: one
+        # started next to a running one opened the board's serial port, failed to
+        # bind the port and kept talking to the board without an API - two
+        # controllers on one board, and the first one's prescan never moved.
+        if _port_in_use(config.http_port):
+            logger.error(f"Port {config.http_port} is in use (another ImSwitch?): not "
+                         "opening the hardware. Stop the other server or pick another "
+                         "--http-port.")
+            raise SystemExit(1)
 
         app = None
         enabledModuleIds = modulesconfigtools.getEnabledModuleIds()

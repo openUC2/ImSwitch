@@ -110,6 +110,14 @@ class PixelCalibrationController(LiveUpdatedController):
         # Currently selected objective (string key).
         self.currentObjective = self._getCurrentObjectiveId()
 
+        # Reachable before the main controller registers it: applying the stored
+        # calibrations below refreshes the objective's shared attributes, and
+        # ObjectiveController asks this controller for the calibrated pixel size.
+        try:
+            self._master.registerController("PixelCalibration", self)
+        except Exception as exc:  # pragma: no cover - defensive
+            self._logger.debug(f"Early registration failed: {exc}")
+
         self._loadAffineCalibrations()
 
         # React to objective changes -> re-apply matching calibration per detector.
@@ -231,6 +239,25 @@ class PixelCalibrationController(LiveUpdatedController):
                 )
             except Exception as exc:
                 self._logger.warning(f"[{detector_name}] setPixelSizeUm failed: {exc}")
+        self._publishPixelSize()
+
+    def _publishPixelSize(self):
+        """Push the detectors' pixel sizes into the shared attributes.
+
+        Snaps, the metadata hub and the objective's field of view read the
+        shared attributes, not the detector. This controller is created last,
+        after Settings and Objective have published the uncalibrated value, so
+        without this every snap recorded the setup file's legacy pixel size.
+        """
+        registry = getattr(self._master, "_controllersRegistry", {}) or {}
+        for name, method in (("Settings", "updateSharedAttrs"), ("Objective", "_updateSharedAttrs")):
+            controller = registry.get(name)
+            if controller is None or not hasattr(controller, method):
+                continue
+            try:
+                getattr(controller, method)()
+            except Exception as exc:  # metadata only; never block applying a calibration
+                self._logger.debug(f"Could not refresh {name} shared attributes: {exc}")
 
     def _resetDetectorFlip(self, detector_name: str):
         """Force a detector's image flip to (False, False).

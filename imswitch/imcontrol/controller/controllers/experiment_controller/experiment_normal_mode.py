@@ -157,6 +157,9 @@ class ExperimentNormalMode(ExperimentModeBase):
         n_times = kwargs.get('n_times', 1)  # Total number of time points
         # Illumination mode: keep illumination on for entire acquisition?
         keep_illumination_on = kwargs.get('keep_illumination_on', False)
+        # Passthrough (no light in the experiment): the sentinel power 1 must
+        # not reach the device, or the light lit by hand went dark.
+        illumination_passthrough = kwargs.get('illumination_passthrough', False)
         # Turn illumination off during the wait between timelapse rounds even
         # when keep_illumination_on keeps it on within a round.
         turn_off_between_timepoints = kwargs.get('turn_off_between_timepoints', True)
@@ -179,6 +182,7 @@ class ExperimentNormalMode(ExperimentModeBase):
                 shared_omero_key=shared_omero_key,
                 n_times=n_times,
                 illumination_kinds=illumination_kinds,
+                flat_fields=kwargs.get('flat_fields') or {},
             )
         # Compute writer offset for multi-timepoint experiments.
         # Each timepoint creates its own set of writers, so the flat
@@ -194,7 +198,7 @@ class ExperimentNormalMode(ExperimentModeBase):
         # LED-matrix synthetic channels ("ring"/"dpc") are excluded — they must
         # be toggled per-frame because each frame uses a different pattern
         # (and DPC explicitly cycles 4 patterns per position).
-        if keep_illumination_on:
+        if keep_illumination_on and not illumination_passthrough:
             for illu_index, illu_source in enumerate(illumination_sources):
                 illu_intensity = illumination_intensities[illu_index] if illu_index < len(illumination_intensities) else 0
                 illu_kind = _kind_for(illu_source)  # name-based lookup; immune to array misalignment
@@ -271,6 +275,9 @@ class ExperimentNormalMode(ExperimentModeBase):
                 "illumination_params": illumination_params,
                 "exposures": exposures,
                 "gains": gains,
+                "camera": self.controller._cameraSnapshot()
+                if hasattr(self.controller, "_cameraSnapshot") else None,
+                "flat_field": kwargs.get('flat_field_info') or {"requested": False},
                 "autofocus": {
                     "enabled": is_auto_focus,
                     "min": autofocus_min,
@@ -335,8 +342,12 @@ class ExperimentNormalMode(ExperimentModeBase):
                           omero_connection_params: Optional[OMEROConnectionParams] = None,
                           shared_omero_key: Optional[str] = None,
                           n_times: int = 1,
-                          illumination_kinds: Optional[List[str]] = None) -> List[OMEWriter]:
-        """One OMEWriter per region (a well, a slide area, a single point)."""
+                          illumination_kinds: Optional[List[str]] = None,
+                          flat_fields: Optional[Dict[str, Any]] = None) -> List[OMEWriter]:
+        """One OMEWriter per region (a well, a slide area, a single point).
+
+        ``flat_fields`` (by light) correct the stitched image; see OMEWriter.
+        """
         n_channels, channel_names = self.channel_layout(
             illumination_intensities, getattr(self.controller, "_illuminationSources", None), illumination_kinds)
         write_omero = omero_connection_params is not None and getattr(self.controller, "_ome_write_omero", False)
@@ -370,6 +381,8 @@ class ExperimentNormalMode(ExperimentModeBase):
                 config=writer_config, logger=self._logger, isRGB=isRGB,
                 omero_connection_params=omero_connection_params, shared_omero_key=shared_omero_key,
                 well_metadata=self.well_metadata(meta), image_name=area_name or None, region_id=region_id,
+                tile_positions=[(tile["x"], tile["y"]) for tile in tiles],
+                flat_fields=flat_fields,
             ))
         if t == 0:
             self.write_plate_sidecar(snake_tiles, region_meta, dir_path)

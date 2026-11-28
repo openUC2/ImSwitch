@@ -152,6 +152,9 @@
     captures and hardware tasks
   - Focus maps per region or well; tiles follow the focus surface
   - Prescan overview (stage map) and firmware-timed fast stage scan as job steps
+- **Slide scanning** in the WellPlate app (`docs/SLIDE_SCANNER.md`): tissue found on the
+  colour prescan (pen ink left out) becomes scan areas with autofocus points on the tissue;
+  flat-field (shading) correction from clear glass; one OME-Zarr + OME-TIFF per section
   - Stitched image per position, at stage positions or registered with Ashlar
   - Well plates from ImSwitch labware as useq plate plans
   - Pause, resume, finish, abort; operator questions
@@ -193,6 +196,7 @@
 - **REST HTTP API** for remote control
 - **Python scripting interface**
 - **Arkitekt integration**: bind the microscope to an Arkitekt server by device-code login; stage, illumination, camera, frame and tile-scan actions; images to mikro (see `docs/ARKITEKT.md`)
+- **SiLA 2 server** for lab-automation workcells (UniteLabs): stage, imaging, well-plate imaging, plate hand-over with a robot; `imswitch-sila-check` exercises every command (see `docs/SILA2.md`)
 
 ### Configuration
 - **JSON-based setup files**

@@ -147,3 +147,94 @@ def test_calibration_falls_back_when_the_line_is_blank():
     ctrl._sweepLine = lambda *a, **k: blank
     lagS, fwd = ctrl._calibratePrescanLag(0.0, SPAN, 0.0, SPEED, 300.0, 4)
     assert lagS == 0.03 and fwd is blank
+
+
+def _loopController(lag):
+    c = fakeController(lag)
+    c._lagFromNeighbour = types.MethodType(StageMapController._lagFromNeighbour, c)
+    c._placeLine = types.MethodType(StageMapController._placeLine, c)
+    return c
+
+
+def test_neighbouring_lines_correct_a_wrong_lag():
+    """A calibration that locked onto the wrong peak (-62 ms once) is corrected
+    by the lines themselves: return lines end up where forward lines are."""
+    rng = np.random.default_rng(5)
+    w = world(rng, int(SPAN / SCALE))
+    true_lag = 0.08
+    c = _loopController(-0.062)
+    loop = {"pinned": False, "previous": None, "estimates": []}
+    lag, strips = -0.062, []
+    for i in range(6):
+        strip, lag = c._placeLine(sweep(w, i % 2 == 0, true_lag), lag, loop)
+        strips.append(strip)
+    assert abs(lag - true_lag) < 0.01
+    assert c._prescanLagS == lag
+    # the last forward and return lines now line up
+    assert abs(estimateProfileShift(strips[-2], strips[-1], maxShiftPx=400)) <= 2
+
+
+def test_a_pinned_lag_is_left_alone():
+    rng = np.random.default_rng(6)
+    w = world(rng, int(SPAN / SCALE))
+    c = _loopController(0.0)
+    loop = {"pinned": True, "previous": None, "estimates": []}
+    lag = 0.0
+    for i in range(4):
+        _, lag = c._placeLine(sweep(w, i % 2 == 0, 0.08), lag, loop)
+    assert lag == 0.0 and loop["estimates"] == []
+
+
+def test_an_impossible_calibration_is_not_used():
+    """A negative lag means a wrong correlation peak: keep the last lag, try again."""
+    rng = np.random.default_rng(7)
+    w = world(rng, int(SPAN / SCALE))
+    c = fakeController(0.03)
+    sweeps = iter([sweep(w, True, -0.08), sweep(w, False, -0.08)])
+    c._sweepLine = lambda *args, **kwargs: next(sweeps)
+    lag, fwd = c._calibratePrescanLag(0.0, SPAN, 0.0, SPEED, 50.0, 1)
+    assert lag == 0.03 and not c._prescanLagCalibrated and fwd is not None
+
+
+def test_lines_placed_before_the_lag_settled_are_laid_out_again():
+    """A calibration that matched one slide's edge to the next (491 ms where 86
+    was right) left the first lines zig-zagged after the loop had corrected the
+    lag. They are placed again, under their own tile ids, from a coarse copy."""
+    rng = np.random.default_rng(8)
+    w = world(rng, int(SPAN / SCALE))
+    true_lag = 0.08
+    c = _loopController(0.3)
+    c.params = types.SimpleNamespace(prescanPreviewUm=2.0)
+    c.PRESCAN_REPLACE_LAG_S = StageMapController.PRESCAN_REPLACE_LAG_S
+    added = []
+
+    def add_strip(strip, minX, maxX, y, pixelSize, replaceId=None):
+        tileId = replaceId if replaceId is not None else len(added)
+        added.append((tileId, y, strip.copy(), pixelSize, replaceId))
+        return tileId
+
+    c._addStrip = add_strip
+    for name in ("_placeAndKeep", "_coarseSweep", "_placeAgain"):
+        setattr(c, name, types.MethodType(getattr(StageMapController, name), c))
+    loop = {"pinned": False, "previous": None, "estimates": []}
+    lines, lag = [], 0.3
+    for i in range(8):
+        lag = c._placeAndKeep(sweep(w, i % 2 == 0, true_lag), lag, loop, lines, 0.0, SPAN, i)
+    assert abs(lag - true_lag) < 0.01
+    first_lag = lines[0][2]
+    n = c._placeAgain(lines, lag, 0.0, SPAN)
+    redone = [a for a in added if a[4] is not None]
+    assert n == len(redone) >= 1 and abs(first_lag - lag) > 0.005
+    assert {a[4] for a in redone} <= {a[0] for a in added if a[4] is None}   # same ids
+    # the first line, placed again, now lines up with a forward line placed right
+    tile0 = [a for a in redone if a[4] == 0][0]
+    assert tile0[3] == 2.0                                    # at preview resolution
+    good = c._placeSweep(sweep(w, True, true_lag).coarse(2), lag)
+    assert abs(estimateProfileShift(tile0[2], good, maxShiftPx=200)) <= 1
+
+
+def test_a_coarse_sweep_is_a_block_mean_at_the_coarser_scale():
+    samples = [(0.0, np.arange(4 * 6, dtype=np.uint16).reshape(4, 6))]
+    coarse = _Sweep(samples, 0.0, 1.0, 6.0, 1.0, True).coarse(2)
+    assert coarse.scale == 2.0 and coarse.samples[0][1].shape == (2, 3)
+    assert coarse.samples[0][1][0, 0] == (0 + 1 + 6 + 7) // 4

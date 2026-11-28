@@ -11,6 +11,9 @@ const initialParameterRangeState = {
     zStack: { min: -10, max: 20 },
     zStackStepSize: { min: 0.1, max: 10 },
     speed: [1,5,10,50,100,500,1000,10000,20000,100000],
+    // The instrument's tested XY scan speed (setup experiment.scanSpeedXY), in
+    // the stage's units; what a run with speed 0 uses.
+    scanSpeedXY: 20000,
     illuSources: [], // Array of conventional (default) illumination sources
     illuSourceKinds: [], // Per-source kind tag parallel to illuSources (all "default" now)
     syntheticChannels: [], // Synthetic LED-matrix channels (ring/DPC), advertised separately
@@ -87,6 +90,10 @@ const parameterRangeSlice = createSlice({
       setSpeed: (state, action) => {
         state.speed = action.payload;
       },
+      setScanSpeedXY: (state, action) => {
+        const v = Number(action.payload);
+        state.scanSpeedXY = Number.isFinite(v) && v > 0 ? v : 20000;
+      },
       setIlluSources: (state, action) => {
         // Defensive: backend may return null/undefined/object when no
         // illumination hardware is configured; the UI assumes an array
@@ -154,6 +161,7 @@ export const {
     setZStackStepSizeMin,
     setZStackStepSizeMax,
     setSpeed, 
+    setScanSpeedXY,
     setIlluSources,
     setIlluSourceKinds,
     setSyntheticChannels,

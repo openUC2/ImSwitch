@@ -273,6 +273,23 @@ export const apiOffAxisHoloControllerSetShowFftSpace = async (enabled) => {
   }
 };
 
+const getOffAxis = async (method, params) => {
+  const response = await createAxiosInstance().get(`/OffAxisHoloController/${method}`, { params });
+  return response.data;
+};
+
+// Locate the +1 order in the current frame and select it as the sideband.
+// Returns { success, cc_center, cc_size, fringe_period_px, fft_shape }.
+export const apiOffAxisHoloControllerFindSideband = () => getOffAxis("find_sideband_offaxisholo");
+
+// Fringe trace: x/y are fractions (0..1) of the full camera frame.
+export const apiOffAxisHoloControllerStartFringeTrace = (xFrac, yFrac, radius = 1) =>
+  getOffAxis("start_fringe_trace_offaxisholo", { x_frac: xFrac, y_frac: yFrac, radius });
+export const apiOffAxisHoloControllerStopFringeTrace = () => getOffAxis("stop_fringe_trace_offaxisholo");
+// Returns { running, x, y, radius, t, v, next }; pass `next` as `since` next time.
+export const apiOffAxisHoloControllerGetFringeTrace = (since = 0) =>
+  getOffAxis("get_fringe_trace_offaxisholo", { since });
+
 export default {
   getParams: apiOffAxisHoloControllerGetParams,
   setParams: apiOffAxisHoloControllerSetParams,

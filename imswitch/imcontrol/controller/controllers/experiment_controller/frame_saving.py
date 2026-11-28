@@ -2,6 +2,8 @@
 
 Mixed into ExperimentController; the methods keep their state on ``self``.
 """
+import json
+import os
 import time
 from fastapi import HTTPException
 import numpy as np
@@ -83,6 +85,57 @@ class FrameSavingMixin:
             "write_single_tiff": getattr(self, '_ome_write_single_tiff', False),
             "write_individual_tiffs": getattr(self, '_ome_write_individual_tiffs', False)
         }
+
+    @APIExport()
+    def getExperimentRuns(self, limit: int = 10) -> Dict[str, Any]:
+        """The most recent runs, newest first, with the images they produced.
+
+        Per run: ``id`` (folder name, the start time), ``name``, ``images``
+        (``path`` below the data folder, as the file manager and the OME-Zarr
+        viewer take it; ``kind`` zarr | tiff), ``tiles``, ``flatField`` (was the
+        stitched image corrected), ``wallS`` / ``sPerFrame`` once finished, and
+        ``running`` for the run in progress.
+        """
+        data_root = dirtools.UserFileDirs.getValidatedDataPath()
+        base = os.path.join(data_root, "ExperimentController")
+        names = sorted((n for n in os.listdir(base) if n[:8].isdigit()), reverse=True) \
+            if os.path.isdir(base) else []
+        running_dir = getattr(self, "_last_experiment_dir", None) \
+            if self.workflow_manager.get_status().get("status") in ("running", "paused") else None
+        runs = []
+        for name in names[:max(1, int(limit))]:
+            folder = os.path.join(base, name)
+            if os.path.isdir(folder):
+                runs.append(self._runSummary(folder, data_root, folder == running_dir))
+        return {"runs": runs}
+
+    @staticmethod
+    def _runSummary(folder: str, data_root: str, running: bool) -> Dict[str, Any]:
+        files = sorted(os.listdir(folder))
+        rel = "/" + os.path.relpath(folder, data_root).replace(os.sep, "/")
+        images = [{"name": f, "path": f"{rel}/{f}",
+                   "kind": "zarr" if f.endswith(".ome.zarr") else "tiff"}
+                  for f in files if f.endswith((".ome.zarr", ".ome.tif", ".ome.tiff"))
+                  and not f.startswith(".")]
+        run = {"id": os.path.basename(folder), "dir": rel, "name": "", "images": images,
+               "tiles": None, "flatField": None, "running": running}
+        protocol = next((f for f in files if f.endswith("_protocol.json")), None)
+        for fname, read in ((protocol, "protocol"), ("step_timings.json", "timing")):
+            if not fname or not os.path.isfile(os.path.join(folder, fname)):
+                continue
+            try:
+                with open(os.path.join(folder, fname), encoding="utf-8") as f:
+                    data = json.load(f)
+            except Exception:
+                continue
+            if read == "protocol":
+                run["name"] = data.get("experiment_name", "")
+                run["tiles"] = data.get("tile_count")
+                run["flatField"] = bool((data.get("flat_field") or {}).get("applied"))
+            else:
+                summary = data.get("summary", {})
+                run["wallS"], run["sPerFrame"] = summary.get("wall_s"), summary.get("s_per_frame")
+        return run
 
     @APIExport()
     def getLastScanAsOMEZARR(self):

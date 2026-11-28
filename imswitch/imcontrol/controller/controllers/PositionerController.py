@@ -752,6 +752,43 @@ class PositionerController(ImConWidgetController):
         self.saveTransportPosition(positionerName=positionerName)
         return {"success": True, "transportPosition": positions}
 
+    @APIExport(runOnUIThread=False)
+    def getSampleLoadingPosition(self, positionerName: Optional[str] = None) -> dict:
+        """The sample loading (plate hand-over) position, device frame, µm: {X, Y, Z}.
+        Empty when the stage has none."""
+        manager = self._master.positionersManager[self._resolvePositionerName(positionerName)]
+        return dict(getattr(manager, "sampleLoadingPositions", {}) or {})
+
+    @APIExport(runOnUIThread=False, requestType="POST")
+    def setSampleLoadingPosition(self, positionerName: Optional[str] = None, useCurrent: bool = True,
+                                 x: Optional[float] = None, y: Optional[float] = None,
+                                 z: Optional[float] = None) -> dict:
+        """Teach the sample loading position (where a robot puts and takes the plate) and save it
+        to the setup JSON (managerProperties sampleLoadingPosition{X,Y,Z}).
+
+        Device frame, µm. With ``useCurrent=True`` the current stage position is taken;
+        otherwise the given axes (others unchanged). moveToSampleLoadingPosition drives there.
+        """
+        name = self._resolvePositionerName(positionerName)
+        manager = self._master.positionersManager[name]
+        positions = getattr(manager, "sampleLoadingPositions", None)
+        if positions is None:
+            raise HTTPException(status_code=501, detail=f"{name} has no sample loading position.")
+        given = {"X": x, "Y": y, "Z": z}
+        for ax in ("X", "Y", "Z"):
+            value = manager.getDevicePositionAxis(axis=ax) if useCurrent else given[ax]
+            if value is not None:
+                positions[ax] = float(value)
+        info = getattr(self, "_setupInfo", None)
+        if info is not None and name in getattr(info, "positioners", {}):
+            props = info.positioners[name].managerProperties
+            for ax, value in positions.items():
+                props["sampleLoadingPosition" + ax] = float(value)
+            options, _ = configfiletools.loadOptions()
+            configfiletools.saveSetupInfo(options, info)
+        self.__logger.info(f"Sample loading position of {name}: {positions}")
+        return dict(positions)
+
     @APIExport(runOnUIThread=True)
     def stopAllAxes(self, positionerName: Optional[str] = None):
         """Immediately stop all axes of the positioner."""

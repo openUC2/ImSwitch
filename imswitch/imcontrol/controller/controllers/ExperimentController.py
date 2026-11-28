@@ -29,11 +29,13 @@ from imswitch.imcontrol.controller.controllers.experiment_controller.overview_ap
 from imswitch.imcontrol.controller.controllers.experiment_controller.hardware_api import HardwareMixin
 from imswitch.imcontrol.controller.controllers.experiment_controller.autofocus_api import AutofocusMixin
 from imswitch.imcontrol.controller.controllers.experiment_controller.frame_saving import FrameSavingMixin
+from imswitch.imcontrol.controller.controllers.experiment_controller.flatfield_api import (
+    FlatFieldMixin)
 
 
 class ExperimentController(LabwareMixin, AshlarMixin, FastStageScanMixin, MDAMixin, FocusMapMixin,
                            OverviewRegistrationMixin, HardwareMixin, AutofocusMixin, FrameSavingMixin,
-                           ImConWidgetController):
+                           FlatFieldMixin, ImConWidgetController):
     """Linked to ExperimentWidget."""
 
     sigExperimentWorkflowUpdate = Signal()
@@ -63,9 +65,12 @@ class ExperimentController(LabwareMixin, AshlarMixin, FastStageScanMixin, MDAMix
             maxsize=32,
         )
 
-        # set default values
-        self.SPEED_Y = self.SPEED_Y_default = 20000
-        self.SPEED_X = self.SPEED_X_default = 20000
+        # set default values; the XY scan speed is the instrument's (setup
+        # experiment.scanSpeedXY), what the stage was tested at
+        scanSpeed = getattr(getattr(self._master, "experimentManager", None), "scanSpeedXY", None)
+        scanSpeed = float(scanSpeed) if scanSpeed and float(scanSpeed) > 0 else 20000.0
+        self.SPEED_Y = self.SPEED_Y_default = scanSpeed
+        self.SPEED_X = self.SPEED_X_default = scanSpeed
         self.SPEED_Z = self.SPEED_Z_default = 10000
         self.ACCELERATION = self.ACCELERATION_default = 1000000
         self.ACCELERATION_Z = self.ACCELERATION_Z_default = 1000000
@@ -203,8 +208,12 @@ class ExperimentController(LabwareMixin, AshlarMixin, FastStageScanMixin, MDAMix
         self._apply_run_settings(p)
         self._illuminationIntensities = plan.intensities  # autofocus_software looks up its channel here
         self._illuminationSources = plan.sources
+        self._illuminationPassthrough = plan.passthrough  # lights are the operator's
         self.set_led_status("rainbow")
-        if not self.mDetector._running:
+        # Started here only if nobody streams; stopped again after the run
+        # (_cleanup), or the camera kept pulling 6 MP at 60 fps over USB forever.
+        self._startedAcquisitionForRun = not self.mDetector._running
+        if self._startedAcquisitionForRun:
             self.mDetector.startAcquisition()
 
         self._focus_map_fit_by_region = True
@@ -237,6 +246,7 @@ class ExperimentController(LabwareMixin, AshlarMixin, FastStageScanMixin, MDAMix
             initial_xyz=self._initial_experiment_position,
             keep_illumination_on=plan.keep_illumination_on, is_rgb=self.isRGB,
             illumination_kinds=plan.kinds, illumination_params=plan.params, region_meta=region_meta,
+            illumination_passthrough=plan.passthrough,
         )
 
         # 3. Execute.
@@ -266,12 +276,23 @@ class ExperimentController(LabwareMixin, AshlarMixin, FastStageScanMixin, MDAMix
 
     def _run_normal_mode(self, ctx: ExecutionContext) -> None:
         """Build the workflow for every timepoint and start it on the workflow manager."""
+        # Same colour and brightness in every tile: no white balance / auto
+        # exposure running during the scan (restored in _cleanup). Locked before
+        # the protocol file is written, so it records the settings of the run.
+        self._lockCameraForScan()
         workflow_steps, file_writers = [], []
-        for t in range(ctx.n_times):
-            ctx.timepoint_index = t
-            result = self.normal_mode.execute_experiment(ctx=ctx)
-            workflow_steps.extend(result["workflow_steps"])
-            file_writers.extend(result["file_writers"])
+        try:
+            # After the lock, before the writers: a reference taken now has the
+            # run's own white balance, exposure and gain.
+            self._prepareRunFlatFields(ctx)
+            for t in range(ctx.n_times):
+                ctx.timepoint_index = t
+                result = self.normal_mode.execute_experiment(ctx=ctx)
+                workflow_steps.extend(result["workflow_steps"])
+                file_writers.extend(result["file_writers"])
+        except Exception:
+            self._restoreCameraAfterScan()
+            raise
 
         self._step_timings = []  # per-step timings for the post-run violin plot
         stepsDone = 0            # drives the progress bar on the status display
@@ -307,6 +328,7 @@ class ExperimentController(LabwareMixin, AshlarMixin, FastStageScanMixin, MDAMix
         # Deterministic triggered acquisition for every acquire_frame(); falls back
         # to frame-number polling when the detector has no software trigger.
         self._beginTriggeredAcquisition()
+        run_started = time.time()
         self.workflow_manager.start_workflow(wf, context)
 
         # Cleanup once the workflow thread ends, also on stop/abort. Writers are
@@ -324,6 +346,14 @@ class ExperimentController(LabwareMixin, AshlarMixin, FastStageScanMixin, MDAMix
                 except Exception as err:
                     self._logger.error(f"Post-workflow writer cleanup failed: {err}")
             self._endTriggeredAcquisition()
+            self._restoreCameraAfterScan()
+            if getattr(self, "_startedAcquisitionForRun", False):
+                self._startedAcquisitionForRun = False
+                try:
+                    self.mDetector.stopAcquisition()
+                except Exception as err:
+                    self._logger.warning(f"Could not stop the camera after the run: {err}")
+            self._export_step_timings_json(ctx.dir_path, wall_s=time.time() - run_started)
             self._export_step_timings_plot(ctx.dir_path)
             finished = getattr(self._commChannel, "sigExperimentFinished", None)
             if finished is not None:  # e.g. the Arkitekt upload of the canvases
@@ -349,12 +379,16 @@ class ExperimentController(LabwareMixin, AshlarMixin, FastStageScanMixin, MDAMix
         """Group a workflow step name into a coarse category for the timing
         violin plot."""
         n = (name or "").strip().lower()
+        if n.startswith("focus map z"):
+            return "Move Z"
         if "autofocus" in n or "focus map" in n:
             return "Autofocus"
         if "acquire" in n or "snap" in n:
             return "Acquire"
-        if n.startswith("move") or "z offset" in n or "→ z" in n or "z →" in n:
-            return "Move"
+        if n.startswith("move to point"):
+            return "Move XY"
+        if n.startswith("move") or "z offset" in n or "base z" in n or "→ z" in n or "z →" in n:
+            return "Move Z"
         if "illumination" in n or "laser" in n or "led" in n:
             return "Illumination"
         if "save" in n or "finaliz" in n or "writer" in n:
@@ -362,6 +396,39 @@ class ExperimentController(LabwareMixin, AshlarMixin, FastStageScanMixin, MDAMix
         if "wait" in n or "timepoint" in n:
             return "Wait"
         return "Other"
+
+    def _export_step_timings_json(self, out_dir: str, wall_s: float) -> None:
+        """Write ``step_timings.json``: every step's duration and per-category statistics.
+
+        The benchmark of a run, readable without the violin plot: where the
+        time per tile goes (move, settle, acquire, save) and which steps were
+        slow. Also logs a one-line summary. Best effort, never raises.
+        """
+        timings = list(getattr(self, "_step_timings", []) or [])
+        if not timings or not out_dir:
+            return
+        try:
+            import json
+            buckets: Dict[str, List[float]] = {}
+            for t in timings:
+                total = t.get("pre_time", 0.0) + t.get("main_time", 0.0) + t.get("post_time", 0.0)
+                buckets.setdefault(self._categorize_step(t.get("name", "")), []).append(total)
+            stats = {cat: {"n": len(v), "sum_s": float(np.sum(v)), "mean_s": float(np.mean(v)),
+                           "median_s": float(np.median(v)), "p95_s": float(np.percentile(v, 95)),
+                           "max_s": float(np.max(v))} for cat, v in buckets.items()}
+            frames = stats.get("Acquire", {}).get("n", 0)
+            summary = {"wall_s": float(wall_s), "steps": len(timings), "frames": frames,
+                       "s_per_frame": float(wall_s / frames) if frames else None}
+            os.makedirs(out_dir, exist_ok=True)
+            with open(os.path.join(out_dir, "step_timings.json"), "w") as fh:
+                json.dump({"summary": summary, "categories": stats, "steps": timings}, fh, indent=1)
+            self._logger.info(
+                f"Run timing: {wall_s:.1f} s, {frames} frames"
+                + (f", {wall_s / frames:.2f} s/frame" if frames else "") + "; "
+                + ", ".join(f"{c} {s['sum_s']:.1f} s" for c, s in sorted(
+                    stats.items(), key=lambda kv: -kv[1]["sum_s"])))
+        except Exception as e:
+            self._logger.warning(f"Could not export step timings: {e}")
 
     def _export_step_timings_plot(self, out_dir: str) -> None:
         """Render a violin plot of per-step wall-clock durations (grouped by
@@ -387,7 +454,7 @@ class ExperimentController(LabwareMixin, AshlarMixin, FastStageScanMixin, MDAMix
                 buckets.setdefault(cat, []).append(total)
 
             # Keep a stable, meaningful category order.
-            order = ["Move", "Autofocus", "Illumination", "Acquire", "Save",
+            order = ["Move XY", "Move Z", "Autofocus", "Illumination", "Acquire", "Save",
                      "Wait", "Other"]
             labels = [c for c in order if c in buckets]
             data = [buckets[c] for c in labels]

@@ -74,10 +74,13 @@ class DetectorContext:
             self.channel_name = self.name
     
     def update(self, **kwargs):
-        """Update context fields."""
+        """Update context fields; the field of view follows a new pixel size or shape."""
         for key, value in kwargs.items():
             if hasattr(self, key):
                 setattr(self, key, value)
+        if ("pixel_size_um" in kwargs or "shape_px" in kwargs) and "fov_um" not in kwargs:
+            self.fov_um = (self.shape_px[0] * self.pixel_size_um,
+                           self.shape_px[1] * self.pixel_size_um)
         self.last_update = time.time()
     
     def to_dict(self) -> Dict[str, Any]:
@@ -195,6 +198,28 @@ class MetadataHub:
             if units:
                 attr_value.units = units
             self._global_metadata[key] = attr_value
+            self._sync_detector_context(key, value)
+
+    # Detector shared attributes that have a field in DetectorContext. The
+    # context is registered once at startup; without this, a calibrated pixel
+    # size or a changed exposure never reached it (snaps/scans recorded 1 µm/px).
+    _CONTEXT_FIELDS = {("Pixel size",): "pixel_size_um", ("Binning",): "binning",
+                       ("Param", "exposure"): "exposure_ms", ("Param", "gain"): "gain"}
+
+    def _sync_detector_context(self, key, value) -> None:
+        if len(key) < 3 or key[0] != "Detector" or key[1] not in self._detector_contexts:
+            return
+        field_name = self._CONTEXT_FIELDS.get(tuple(key[2:]))
+        if field_name is None:
+            return
+        try:
+            if field_name == "pixel_size_um":
+                value = float(value[-1]) if isinstance(value, (list, tuple)) else float(value)
+                if value <= 0:
+                    return
+            self._detector_contexts[key[1]].update(**{field_name: value})
+        except (TypeError, ValueError, IndexError):
+            pass
     
     def get(self, key: Tuple[str, ...]) -> Optional[SharedAttrValue]:
         """Get a metadata value."""

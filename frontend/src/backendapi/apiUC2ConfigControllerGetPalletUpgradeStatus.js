@@ -3,7 +3,8 @@ import createAxiosInstance from "./createAxiosInstance";
 /**
  * State and terminal output of the pallet upgrade.
  *
- * @returns {Promise<Object>} { state: "activating" | "inactive" | "failed" | ..., log }
+ * @returns {Promise<Object>} { state: "activating" | "inactive" | "failed" | ..., log, unit,
+ *   versioning: { current, pending, pallet, "upgrade-source", ... } }
  */
 const apiUC2ConfigControllerGetPalletUpgradeStatus = async () => {
   const axiosInstance = createAxiosInstance();

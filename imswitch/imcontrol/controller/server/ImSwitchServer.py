@@ -125,6 +125,16 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
+
+@app.middleware("http")
+async def _workcell_lock_guard(request: Request, call_next):
+    """While a SiLA workcell holds the lock, refuse requests that move, light or start (423)."""
+    from imswitch.imcontrol.model import workcell_lock
+    reason = workcell_lock.http_refusal(request.url.path)
+    if reason:
+        return JSONResponse(status_code=423, content={"detail": reason})
+    return await call_next(request)
+
 '''Add Endpoints for Filemanager'''
 
 # Pydantic Model for folder creation

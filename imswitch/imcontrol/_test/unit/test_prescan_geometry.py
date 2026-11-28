@@ -205,8 +205,10 @@ def _recording_controller(pixel_size=1.0):
     c._addStrip = lambda strip, minX, maxX, y, pixelSize: c.strips.append((y, strip.copy()))
     for name in ("_prescanLoop", "_enterPrescanOptics", "_restorePrescanOptics",
                  "_objectiveController", "_placeSweep", "_spreadSamples",
-                 "_calibratePrescanLag"):
+                 "_calibratePrescanLag", "_placeLine", "_lagFromNeighbour",
+                 "_placeAndKeep", "_coarseSweep", "_placeAgain"):
         setattr(c, name, types.MethodType(getattr(StageMapController, name), c))
+    c.PRESCAN_REPLACE_LAG_S = StageMapController.PRESCAN_REPLACE_LAG_S
     return c
 
 
@@ -264,3 +266,31 @@ if __name__ == "__main__":
             fn()
             print(f"ok  {name}")
     print("all passed")
+
+
+def test_auto_lag_tries_the_next_line_when_the_first_has_no_contrast():
+    """A slide's first line is often the dark holder end: nothing to correlate.
+
+    Calibrating only there kept the stale lag for the whole prescan and every
+    other strip zig-zagged (FRAME 2026-11-26). The next line is tried instead.
+    """
+    c = _recording_controller()
+    c.params = types.SimpleNamespace(prescanLagMs=-1.0)
+    textured = c._sweepLine
+
+    def line(startX, endX, y, speedX, dx, subsample):
+        sweep = textured(startX, endX, y, speedX, dx, subsample)
+        if y == 0.0:      # uniform dark bands: no contrast on the first line
+            return _Sweep([(t, np.zeros_like(band)) for t, band in sweep.samples], -0.5, 9.5,
+                          abs(endX - startX), 1.0, endX >= startX)
+        return sweep
+
+    c._sweepLine = line
+    c._prescanLoop(0.0, 1000.0, 0.0, 200.0, 100.0, 5000.0, None, 0.0, 4)
+
+    assert [(s[0], s[1], s[2]) for s in c.sweeps] == [
+        (0.0, 1000.0, 0.0), (1000.0, 0.0, 0.0),        # line 0: calibration, no contrast
+        (0.0, 1000.0, 100.0), (1000.0, 0.0, 100.0),    # line 1: calibrated here
+        (0.0, 1000.0, 200.0),                          # line 2: serpentine continues
+    ]
+    assert [y for y, _ in c.strips] == [0.0, 100.0, 200.0]

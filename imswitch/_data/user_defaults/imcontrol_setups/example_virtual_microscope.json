@@ -366,13 +366,16 @@
         "host": "0.0.0.0",
         "port": 54333,
         "active": false
-    },
-    "rois": {},
-    "ledPresets": {},
-    "defaultLEDPresetForScan": null,
-    "laserPresets": {},
-    "stageOffsets": {},
-    "defaultLaserPresetForScan": null,
+    },  
+    "sila2": {
+    "enabled": true,
+    "serverName": "OpenUC2 ImSwitch",
+    "serverDescription": "SiLA2 server for OpenUC2 ImSwitch microscope control",
+    "serverHost": "0.0.0.0",
+    "serverPort": 50052,
+    "serverVersion": "0.1.0",
+    "vendorUrl": "https://openuc2.com"
+  },
     "availableWidgets": [
         "Settings",
         "View",
@@ -400,25 +403,9 @@
         "Composite",
         "InLineHolo",
         "Temperature",
+        "OffAxisHoloController",
         "I2CSensor",
-        "Aufgaben", "StageMap", "OPM", "SLM"
-    ],
-    "nonAvailableWidgets": [
-        "STORMRecon",
-        "Lepmon",
-        "Histogramm",
-        "imswitch_lightsheet",
-        "imswitch_arkitekt_next",
-        "FocusLock",
-        "FlowStop",
-        "SIM",
-        "imswitch_arkitekt",
-        "DPC",
-        "FOVLock",
-        "Temperature",
-        "PixelCalibration",
-        "WebRTC",
-        "Flatfield",
-        "DPC"
+        "Aufgaben", "StageMap", "OPM",
+        "SiLa2"
     ]
 }

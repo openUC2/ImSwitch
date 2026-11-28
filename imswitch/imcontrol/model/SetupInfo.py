@@ -645,6 +645,11 @@ class ExperimentInfo:
     ExperimentController will look for a detector named ``"overviewcamera"``
     and otherwise leave the overview feature disabled. """
 
+    scanSpeedXY: Optional[float] = None
+    """ XY stage speed of scans and prescans that do not set their own, in the
+    stage's speed units (UC2/ESP32: firmware steps/s; 80000 = 25 mm/s at
+    0.3125 µm/step). ``None``: 20000. Set it to what this stage was tested at. """
+
 
 @dataclass(frozen=False)
 class ISMInfo:
@@ -776,6 +781,34 @@ class SiLA2Info:
 
     vendorUrl: str = "https://openuc2.com"
     """ Vendor URL reported in SiLA2 service discovery. """
+
+    serverUUID: Optional[str] = None
+    """ SiLA server UUID. None = derived from hostname and setup file, stable across restarts. """
+
+    discovery: bool = True
+    """ Announce the server over mDNS (SiLA discovery), so a workcell finds it by UUID. """
+
+    tls: bool = False
+    """ Serve SiLA over TLS. Needs certificateChain and privateKey. """
+
+    certificateChain: Optional[str] = None
+    """ Path to (or PEM text of) the server certificate chain, for tls. """
+
+    privateKey: Optional[str] = None
+    """ Path to (or PEM text of) the server private key, for tls. """
+
+    cloudEndpoint: Optional[str] = None
+    """ UniteLabs cloud endpoint hostname (no https://). None = local network only. """
+
+    cloudPort: int = 443
+    """ Port of the cloud endpoint (TLS). """
+
+    handoverPositionName: str = "Stage"
+    """ Name of the plate hand-over position (LabwareTransferSiteController). """
+
+    plateOrigins: Dict[str, List[float]] = field(default_factory=dict)
+    """ Plate origins taught with SetPlateOrigin: labware load name -> [dx, dy] µm, so that
+    stage = well position in the labware definition + (dx, dy). """
 
 
 @dataclass(frozen=False)

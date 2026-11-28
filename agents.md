@@ -112,6 +112,11 @@ ignores every flag. It then starts the user's default setup from
 `~/ImSwitchConfig/config/imcontrol_options.json` against real hardware. There is no `--headless` flag;
 the server is always headless.
 
+ImSwitch exits (code 1) before opening any hardware when its HTTP port is already in use: a second
+instance next to a running one used to open the board's serial port anyway, fail to bind, and keep
+talking to the board without an API. To restart, stop the Python process itself; `arch -x86_64 …`
+or `uv run …` launchers can exit while their child keeps running.
+
 Flags (`imswitch/__main__.py`):
 
 | Flag | Meaning |
@@ -460,7 +465,16 @@ Running:
 - `startFastStageScanAcquisition(xstart, xstep, nx, ystart, ystep, ny, zstart, …)` /
   `stopFastStageScanAcquisition` / `startFastStageScanAcquisitionFilePath` — firmware-timed,
   fastest path
-- `getLastScanAsOMEZARR()`
+- `getLastScanAsOMEZARR()`; `getExperimentRuns(limit)` — recent runs with their images (paths
+  below the data folder), tile count, flat-field and timing
+- Flat-field (shading) reference (`model/flatfield.py`, `docs/SLIDE_SCANNER.md`):
+  `captureFlatField(request{x, y, frames, spacingUm, illumination, intensity, …})` (POST) —
+  **moves the stage** on a small grid on blank glass and switches the light on;
+  `getFlatFieldStatus`, `deleteFlatField(key)`. A run with `parameterValue.flatField` divides the
+  stitched image (not the individual tiles) by the reference of its objective and light, or by
+  a fresh one taken at `flatFieldX/Y` first; the reference goes into the run folder
+- `parameterValue.speed = 0` uses the setup's `experiment.scanSpeedXY` (the stage's tested
+  speed, stage units; 20000 without it)
 
 useq-schema MDA:
 
@@ -548,7 +562,12 @@ prescan and firmware stage scans, digital I/O, temperature; plan and format in
   isBlocking)`, `saveStitchedOmeTiff(filename)`
 - `startPrescan(minX, maxX, minY, maxY, dy, speedX, …)` (POST) / `stopPrescan` — fast
   low-resolution sweep; refused, like `startStageMap`, while an experiment, job, recording or
-  calibration runs (`controller/busy.py`)
+  calibration runs (`controller/busy.py`). Colour cameras give colour strips
+- `detectTissue(request{slides, overlap, odThreshold, rejectInk, …})` (POST) — tissue on the
+  prescanned slides (`model/tissue_detection.py`): per slide regions (outlines, tiles, focus
+  points, `scanPolygon`, stage µm), pen ink (colour only) and a clear-glass spot; moves
+  nothing. The WellPlate "Detect tissue" button turns regions into freehand scan areas
+  (`docs/SLIDE_SCANNER.md`)
 
 ### 4.10 Metadata, storage and files
 
@@ -632,7 +651,9 @@ Safe to read:
   identity. Empty port = ImSwitch's own board over the open link; another port is opened and
   may reset that board.
 - `getFirmwareUpdateStatus`, `getFirmwareUpdatePrompt`, `getFirmwareCheckOnConnect`
-- `getPalletUpgradeStatus()` — systemd state + terminal output of the OS pallet upgrade
+- `getPalletUpgradeStatus()` — systemd state + terminal output of the OS pallet upgrade, and the
+  host's pallet versions (`versioning`: current, pending, stored upgrade query);
+  `listPalletVersions()` — branches and tags of github.com/openUC2/os-rpi (GitHub API)
 
 Confirm before calling:
 
@@ -648,9 +669,12 @@ Confirm before calling:
 - Lifecycle: `espRestart`, `restartCANDevice`, `stopImSwitch`, `restartImSwitch`,
   `powerOffHost(reboot)` (POST; stops motors, lights off, then logind power-off/reboot on the host),
   `moveToSampleMountingPosition`
-- **OS upgrade (experimental, openUC2 OS only):** `startPalletUpgrade()` starts the host unit
+- **OS upgrade (experimental, openUC2 OS only):** `startPalletUpgrade(version)` starts the host unit
   `imswitch-pallet-upgrade.service` over the mounted D-Bus socket, which runs
-  `forklift plt upgrade --force && forklift stage apply` and recreates the ImSwitch container
+  `forklift plt upgrade --force && forklift stage apply` and recreates the ImSwitch container;
+  with a `version` (branch, tag or commit of os-rpi, e.g. `edge`) it starts
+  `imswitch-pallet-upgrade@<version>.service` instead: `forklift plt upgrade --force
+  --allow-downgrade @<version>`, which also stores that version as the upgrade query
 - **Firmware — highest risk:** `flashMasterFirmwareUSB(port, match, baud, firmware_filename)`,
   `cancelUSBFlash`, `sendCanAddress`, `testDeviceAction` (moves a freshly flashed motor),
   `reassignCANId(new_id, mac, target)`, `startCANStreamingOTA(can_id, firmware_url, baud)`,
@@ -680,7 +704,7 @@ Present only when the setup enables them. Discover with `getAvailableControllers
 | `SIMController` | Structured illumination microscopy |
 | `STORMReconController` | Single-molecule localisation / STORM |
 | `DPCController` | Differential phase contrast (LED-matrix halves) |
-| `InLineHoloController`, `OffAxisHoloController`, `HoloController` | Digital holography |
+| `InLineHoloController`, `OffAxisHoloController`, `HoloController` | Digital holography. Off-axis also has `find_sideband_offaxisholo` (selects the +1 order, returns the fringe period) and a fringe trace for interferometer drift: `start_fringe_trace_offaxisholo(x_frac, y_frac, radius)` / `get_fringe_trace_offaxisholo(since)` / `stop_…` (one pixel box per frame, only while a live stream delivers frames). Snapshot reconstruction, the simulator and the build guides run in the browser (`frontend/src/components/holo/`) |
 | `LightsheetController` | Light-sheet scanning |
 | `OPMController` | dvOPM digital twin (`model/opm`, model axes linked to stage axes by setup `opm.axisMap`; `moveOPMAxes(virtual=True)` shifts the drawing onto the real sheet without moving, `setOPMReference` resets it), launch ray trace, sample-X stage scan placed by the measured speed and camera frame counter, optional deskew. `moveOPMAxes` / `setOPMMedium` move linked axes: **ask first** on hardware; `force=True` skips only the twin's own travel check, never the stage's soft limits |
 | `SpectrometerController` | Grating spectrometer on a camera (`model/spectrometer`, setup block `spectrometer`, `docs/SPECTROMETER.md`): live spectrum (px / nm / cm⁻¹), dark, averaging, smile, calibration wizard (`startSpectrometerWizard` → `getSpectrometerWizard` → `continueSpectrometerWizard` for sources switched by hand → `applySpectrometerWizard`), grating alignment with a known line, HDF5/CSV export. The wizard and `setSpectrometerSource` switch lasers (at `laserPowerFraction` of the range) and LED-matrix channels: **ask first** on hardware, like a laser |
@@ -699,6 +723,16 @@ login, returns at once), `cancelArkitekt`, `unbindArkitekt` (forgets the stored 
 `setArkitektSettings`, `getArkitektUploads`. Binding is network-only, but once connected the server
 can call the declared actions, which move the stage and switch illumination. **Ask first** before
 binding a real instrument.
+
+`SiLa2Controller` (`docs/SILA2.md`): a SiLA 2 server (UniteLabs CDK, setup block `sila2`, port
+50052) for lab-automation workcells: stage, imaging, objectives, well plates / experiments,
+saved Aufgaben jobs, the SiLA standard plate hand-over (`LabwareTransferSiteController`) and
+Lock Controller. `getSiLA2Status` / `releaseWorkcellLock` over HTTP. While a workcell holds the
+lock, HTTP requests that move, light or start return **423**; reads and stops stay open — a 423
+is the answer, do not release the lock to get past it unless the user says the workcell is gone.
+`imswitch-sila-check --host H --port P` calls every SiLA command; `--motion`, `--light`,
+`--teach` (overwrites taught plate origin and loading position) and `--home` add the steps that
+move, light up, write the setup or home: **ask first** before those on hardware.
 | `StresstestController`, `DebugController`, `DemoController`, `AcceptanceTestController` | Diagnostics and self-test |
 
 ---

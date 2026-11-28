@@ -149,10 +149,43 @@ class AutofocusMixin:
         """Budget for one autofocus scan: steps x (settle + a frame), 3x safety.
         A flat two minutes made every hang cost the ceiling.
         """
-        steps = max(1, int(abs(af_range) / max(abs(af_resolution), 1e-6)) + 1)
+        steps = max(1, int(2 * abs(af_range) / max(abs(af_resolution), 1e-6)) + 1)   # ±af_range
         per_step_s = max(af_settle_time, 0.0) + 1.0
         budget = 3.0 * steps * per_step_s * (2.0 if two_stage else 1.0)
         return min(120.0, max(10.0, budget))
+
+    def _light_for_autofocus(self, channel: str = "") -> str:
+        """Switch on the light autofocus looks through; returns its name ("" = none).
+
+        Without a channel of its own, autofocus uses the run's first light
+        that is on (at the run's intensity), and none in a passthrough run. The focus-map phase runs before any tile
+        has switched a light on, and focusing on dark frames rejected nearly
+        every point of a FRAME slide scan (the rest were noise picks).
+        """
+        sources = list(getattr(self, "_illuminationSources", None) or [])
+        intensities = list(getattr(self, "_illuminationIntensities", None) or [])
+        if not channel:
+            if getattr(self, "_illuminationPassthrough", False):
+                return ""          # lit by hand: the run's power 1 is only a sentinel
+            names = list(getattr(self, "allIlluNames", None) or [])
+            channel = next((s for s, v in zip(sources, intensities)
+                            if s in names and v and v > 0), "")
+        lasers = getattr(getattr(self, "_master", None), "lasersManager", None)
+        if not channel or lasers is None:
+            return ""
+        try:
+            self._logger.debug(f"Activating illumination channel '{channel}' for autofocus")
+            # The run's intensity for this light, by the run's own source list
+            # (the device list has another order when lights are skipped)
+            index = sources.index(channel) if channel in sources else -1
+            power = (intensities[index] or 0) if 0 <= index < len(intensities) else 0
+            if power <= 0:
+                power = lasers[channel].getValue() or 50
+            self.set_laser_power(power=power, channel=channel)
+            return channel
+        except Exception as e:
+            self._logger.warning(f"Failed to set illumination channel {channel}: {e}")
+            return ""
 
     def autofocus_software(self, af_range: float = 100.0, af_resolution: float = 10.0,
                            af_cropsize: int = 2048, af_algorithm: str = "LAPE",
@@ -193,23 +226,7 @@ class AutofocusMixin:
             self._logger.warning("AutofocusController not available - skipping autofocus")
             return None
 
-        # Activate illumination during autofocus so the camera sees contrast
-        if illuminationChannel and hasattr(self, '_master') and hasattr(self._master, 'lasersManager'):
-            try:
-                self._logger.debug(f"Activating illumination channel '{illuminationChannel}' for autofocus")
-                # Look up the current intensity from the experiment's channel settings
-                illu_intensity = 0
-                try:
-                    idx = list(self.allIlluNames).index(illuminationChannel)
-                    illu_intensity = self._illuminationIntensities[idx] if hasattr(self, '_illuminationIntensities') and idx < len(self._illuminationIntensities) else 0
-                except (ValueError, IndexError, AttributeError):
-                    pass
-                # If no stored intensity, use a safe default
-                if illu_intensity <= 0:
-                    illu_intensity = self._master.lasersManager[illuminationChannel].getValue() or 50
-                self.set_laser_power(power=illu_intensity, channel=illuminationChannel)
-            except Exception as e:
-                self._logger.warning(f"Failed to set illumination channel {illuminationChannel}: {e}")
+        self._light_for_autofocus(illuminationChannel)
 
         af_started_at = time.time()
         try:
@@ -233,14 +250,16 @@ class AutofocusMixin:
                     static_offset=af_static_offset,
                 )
             else:
-                # Z-sweep autofocus: scan through range and fit Gaussian
-                # Determine rangez: prefer af_range, fall back to legacy minZ/maxZ
+                # Z-sweep autofocus: scan through range and fit Gaussian.
+                # af_range is ±µm around the current Z; AutofocusController's
+                # rangez is the FULL width (it scans ±rangez/2). Passing af_range
+                # through scanned half the configured window (±50 µm for ±100).
                 if af_range > 0:
-                    rangez = af_range
+                    rangez = 2.0 * af_range
                 elif maxZ > minZ:
-                    rangez = abs(maxZ - minZ) / 2.0
+                    rangez = abs(maxZ - minZ)
                 else:
-                    rangez = 50.0
+                    rangez = 100.0
 
                 # Determine resolution: prefer af_resolution, fall back to legacy stepSize
                 resolutionz = af_resolution if af_resolution > 0 else (stepSize if stepSize > 0 else 10.0)

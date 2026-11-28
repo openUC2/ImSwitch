@@ -18,13 +18,26 @@ from imswitch.imcontrol.controller.controllers.experiment_controller import Expe
 class HardwareMixin:
     """Camera, illumination, stage and sensor primitives the scan steps call."""
 
+    @property
+    def detectorPixelSize(self):
+        """The acquisition camera's pixel size [Z, Y, X] in µm, read live.
+
+        PixelCalibrationController is created after this controller and pushes
+        the calibrated value into the detector, and an objective change replaces
+        it again: a copy taken at startup recorded 1.0 µm/px in every scan.
+        """
+        return self.mDetector.pixelSizeUm
+
     def _init_hardware(self):
         """Detector, lasers, LED matrix, stage — and the capability list the designer shows."""
-        # select detectors
+        # The acquisition camera: the first detector marked forAcquisition, not
+        # just the first one listed (an overview camera listed first would
+        # otherwise image every tile).
         allDetectorNames = self._master.detectorsManager.getAllDeviceNames()
-        self.mDetector = self._master.detectorsManager[allDetectorNames[0]]
+        acquisitionNames = [name for name in allDetectorNames
+                            if getattr(self._master.detectorsManager[name], "forAcquisition", False)]
+        self.mDetector = self._master.detectorsManager[(acquisitionNames or allDetectorNames)[0]]
         self.isRGB = bool(getattr(self.mDetector._camera, 'isRGB', False))
-        self.detectorPixelSize = self.mDetector.pixelSizeUm
 
         # select lasers
         self.allIlluNames = self._master.lasersManager.getAllDeviceNames()
@@ -79,6 +92,7 @@ class HardwareMixin:
         self.ExperimentParams.isDPCpossible = False
         self.ExperimentParams.isDarkfieldpossible = False
         self.ExperimentParams.performanceMode = False
+        self.ExperimentParams.scanSpeedXY = float(getattr(self, "SPEED_X_default", 20000.0))
         for laserN in self.availableIlluminations:
             self.ExperimentParams.illuSourceMinIntensities.append(laserN.valueRangeMin)
             self.ExperimentParams.illuSourceMaxIntensities.append(laserN.valueRangeMax)
@@ -238,6 +252,55 @@ class HardwareMixin:
             return self.mDetector._camera.exposure_time / 1e6
         except Exception:
             return 0.1
+
+    # Camera automatics that would change the image from tile to tile: a stained
+    # slide's colour (white balance) and brightness (auto exposure) must be the
+    # same in every tile of a mosaic. Locked to their current values for a run.
+    _SCAN_LOCKED_MODES = (("awb_mode", "manual"), ("exposure_mode", "manual"))
+
+    def _lockCameraForScan(self) -> None:
+        """Switch camera automatics to manual (keeping their current values) for the run."""
+        self._cameraRestore = {}
+        params = getattr(self.mDetector, "parameters", {}) or {}
+        for name, locked in self._SCAN_LOCKED_MODES:
+            if name not in params:
+                continue
+            try:
+                current = self.mDetector.getParameter(name)
+            except Exception:
+                current = params[name].value
+            if current is None or str(current).lower() in (locked, "once"):
+                continue
+            try:
+                self.mDetector.setParameter(name, locked)
+                self._cameraRestore[name] = current
+                self._logger.info(f"Scan: camera {name} '{current}' locked to '{locked}' for the run")
+            except Exception as e:
+                self._logger.warning(f"Could not lock camera {name}: {e}")
+
+    def _restoreCameraAfterScan(self) -> None:
+        """Give the camera back the automatics _lockCameraForScan switched off."""
+        for name, value in (getattr(self, "_cameraRestore", None) or {}).items():
+            try:
+                self.mDetector.setParameter(name, value)
+            except Exception as e:
+                self._logger.warning(f"Could not restore camera {name}={value}: {e}")
+        self._cameraRestore = {}
+
+    def _cameraSnapshot(self) -> Dict[str, Any]:
+        """The acquisition camera's settings, for the run's protocol file."""
+        snapshot = {"detector": getattr(self.mDetector, "name", None), "isRGB": bool(self.isRGB)}
+        try:
+            snapshot["pixel_size_um"] = float(self.detectorPixelSize[-1])
+        except Exception:
+            pass
+        params = getattr(self.mDetector, "parameters", {}) or {}
+        for name in ("exposure", "gain", "blacklevel", "exposure_mode", "awb_mode",
+                     "red_gain", "blue_gain", "binning"):
+            if name in params:
+                value = params[name].value
+                snapshot[name] = value if isinstance(value, (int, float, str, bool)) else str(value)
+        return snapshot
 
     def _beginTriggeredAcquisition(self) -> bool:
         """Switch the detector to software-trigger mode for deterministic post-move grabs.

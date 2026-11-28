@@ -5,6 +5,7 @@ import time
 import traceback
 import threading
 import queue
+from collections import deque
 
 # Try to import skimage for proper 2D phase unwrapping
 try:
@@ -36,6 +37,9 @@ except:
 from imswitch.imcommon.model import initLogger, APIExport
 from imswitch.imcommon.framework import Signal, Thread, Worker, Mutex
 from ..basecontrollers import LiveUpdatedController
+
+# Fringe trace ring buffer: ~30 min at 30 fps.
+TRACE_MAX_SAMPLES = 60000
 
 
 # =========================
@@ -215,6 +219,15 @@ class OffAxisHoloController(LiveUpdatedController):
         # Cached Fourier-space field for fast dz re-propagation (avoids recomputing FFT)
         self._cached_fourier_field = None
 
+        # Fringe trace (interferometer drift): mean of a small box around one
+        # sensor pixel, sampled from every camera frame while armed.
+        self._trace = None  # {"fx", "fy", "radius", "t0", "x", "y"} while armed
+        self._trace_last = {}  # the stopped trace's position, still readable
+        self._trace_lock = threading.Lock()
+        self._trace_t = deque(maxlen=TRACE_MAX_SAMPLES)
+        self._trace_v = deque(maxlen=TRACE_MAX_SAMPLES)
+        self._trace_count = 0  # samples appended since start (absolute index)
+
         # MJPEG streaming queues (separate for each stream type)
         self._mjpeg_queue_fft = queue.Queue(maxsize=5)
         self._mjpeg_queue_magnitude = queue.Queue(maxsize=5)
@@ -255,15 +268,15 @@ class OffAxisHoloController(LiveUpdatedController):
         - Dropped if queue is full (to prevent memory buildup)
         """
         # Only process frames from our target camera
-        if detectorName != self.camera:
+        if detectorName != self.camera or image is None:
             return
+
+        # The fringe trace samples every frame, processing or not.
+        if self._trace is not None:
+            self._sample_trace(image)
 
         # Skip if processing is not enabled
         if not self._state.is_processing:
-            return
-
-        # Skip if image is None
-        if image is None:
             return
 
         # Store last frame (always, for pause mode)
@@ -569,6 +582,55 @@ class OffAxisHoloController(LiveUpdatedController):
 
         return image
 
+    def _prepared_gray(self, image):
+        """binning -> ROI -> colour -> transforms; the frame whose FFT holds the
+        sideband, so cc_center is in this array's pixel coordinates."""
+        roi = self._extract_roi(self._apply_binning(image))
+        gray = self._extract_color_channel(roi)
+        return self._apply_transforms(gray).astype(np.float64)
+
+    @staticmethod
+    def _locate_sideband(gray, dc_fraction=0.05):
+        """Find the +1 order in the centred spectrum of an off-axis hologram.
+
+        A Hann window first, so the bright cross that the non-periodic image
+        edges put on the frequency axes does not outshine the carrier. Only one
+        half-plane is searched (the -1 order is its mirror image).
+
+        Returns ``(cx, cy, size, period_px)``: the peak in FFT pixels, a square
+        crop size of 2/3 of the carrier distance (keeps the crop clear of the DC
+        term and its autocorrelation halo) and the fringe period in pixels.
+        """
+        h, w = gray.shape
+        win = np.outer(np.hanning(h), np.hanning(w))
+        F = np.abs(np.fft.fftshift(np.fft.fft2((gray - gray.mean()) * win)))
+        cy, cx = h // 2, w // 2
+        yy, xx = np.ogrid[:h, :w]
+        F[np.hypot((yy - cy) / h, (xx - cx) / w) < dc_fraction] = 0
+        F[(xx < cx) | ((xx == cx) & (yy > cy))] = 0
+        py, px = np.unravel_index(int(np.argmax(F)), F.shape)
+        dist = float(np.hypot(px - cx, py - cy))
+        size = max(8, int(2 * dist / 3) // 2 * 2)
+        period = 1.0 / max(np.hypot((px - cx) / w, (py - cy) / h), 1e-9)
+        return int(px), int(py), size, float(period)
+
+    def _sample_trace(self, image):
+        """Append the mean of the (2r+1)^2 box around the traced pixel."""
+        tr = self._trace
+        h, w = image.shape[:2]
+        x = int(round(tr["fx"] * (w - 1)))
+        y = int(round(tr["fy"] * (h - 1)))
+        r = tr["radius"]
+        patch = image[max(0, y - r):y + r + 1, max(0, x - r):x + r + 1]
+        if patch.size == 0:
+            return
+        value = float(np.mean(self._extract_color_channel(patch)))
+        with self._trace_lock:
+            tr["x"], tr["y"] = x, y
+            self._trace_t.append(time.time() - tr["t0"])
+            self._trace_v.append(value)
+            self._trace_count += 1
+
     def _process_offaxis(self, image):
         """
         Process off-axis hologram with full pipeline.
@@ -578,13 +640,7 @@ class OffAxisHoloController(LiveUpdatedController):
             or None if processing fails
         """
         try:
-            # Apply binning first
-            binned = self._apply_binning(image)
-
-            # Extract ROI and color channel
-            roi = self._extract_roi(binned)
-            gray = self._extract_color_channel(roi)
-            gray = self._apply_transforms(gray).astype(np.float64)
+            gray = self._prepared_gray(image)
 
             # Store FFT shape for coordinate calculations
             self._state.fft_shape = gray.shape
@@ -961,6 +1017,102 @@ class OffAxisHoloController(LiveUpdatedController):
         """Set processing frequency in Hz"""
         self.set_update_rate(update_freq)
         return self._params.to_dict()
+
+    @APIExport(runOnUIThread=False)
+    def find_sideband_offaxisholo(self) -> Dict[str, Any]:
+        """Locate the +1 order in the current frame and select it.
+
+        Uses the last processed frame (or grabs one), applies the same
+        binning/ROI/colour/transforms as the live pipeline and sets ``cc_center``
+        and a square ``cc_size`` in FFT pixels of that array. Side effects: only
+        the sideband parameters change.
+
+        Returns ``{success, cc_center, cc_size, fringe_period_px, fft_shape}``.
+        """
+        image = self._last_frame
+        if image is None:
+            self._ensure_camera_running()
+            image = self._capture_camera_frame()
+        if image is None:
+            return {"success": False, "error": "No frame available"}
+        gray = self._prepared_gray(image)
+        cx, cy, size, period = self._locate_sideband(gray)
+        self._state.fft_shape = gray.shape
+        self.set_cc_roi_offaxisholo(cx, cy, size, size)
+        return {
+            "success": True,
+            "cc_center": [cx, cy],
+            "cc_size": [size, size],
+            "fringe_period_px": round(period, 2),
+            "fft_shape": list(gray.shape),
+        }
+
+    # =========================
+    # API: Fringe trace (interferometer drift)
+    # =========================
+    @APIExport(runOnUIThread=True)
+    def start_fringe_trace_offaxisholo(self, x_frac: float, y_frac: float,
+                                       radius: int = 1) -> Dict[str, Any]:
+        """Start sampling the intensity at one sensor position on every frame.
+
+        Args:
+            x_frac, y_frac: position as a fraction (0..1) of the full camera
+                frame width/height, so the caller needs no knowledge of stream
+                subsampling. Raw frame orientation (no holo ROI/flip/rotation).
+            radius: the value is the mean of a (2*radius+1)^2 pixel box.
+
+        Clears the previous trace. Samples arrive with the camera frame rate
+        while acquisition runs, independent of hologram processing. Read them
+        with ``get_fringe_trace_offaxisholo``. Moves nothing.
+        """
+        self._ensure_camera_running()
+        with self._trace_lock:
+            self._trace_t.clear()
+            self._trace_v.clear()
+            self._trace_count = 0
+            self._trace = {
+                "fx": float(np.clip(x_frac, 0.0, 1.0)),
+                "fy": float(np.clip(y_frac, 0.0, 1.0)),
+                "radius": max(0, int(radius)),
+                "t0": time.time(),
+                "x": None,
+                "y": None,
+            }
+        return {"success": True, "running": True}
+
+    @APIExport(runOnUIThread=True)
+    def stop_fringe_trace_offaxisholo(self) -> Dict[str, Any]:
+        """Stop sampling; the recorded trace stays readable."""
+        with self._trace_lock:
+            if self._trace is not None:
+                self._trace_last = dict(self._trace)
+            self._trace = None
+        return {"success": True, "running": False}
+
+    @APIExport(runOnUIThread=True)
+    def get_fringe_trace_offaxisholo(self, since: int = 0) -> Dict[str, Any]:
+        """Return trace samples with absolute index >= ``since``.
+
+        Returns ``{running, x, y, radius, t: [s since start], v: [counts],
+        next}``; pass ``next`` as ``since`` on the following poll. ``x``/``y``
+        are sensor pixels of the raw frame. The buffer keeps the last
+        TRACE_MAX_SAMPLES samples.
+        """
+        with self._trace_lock:
+            tr = self._trace or self._trace_last
+            first = self._trace_count - len(self._trace_t)
+            start = max(0, int(since) - first)
+            t = list(self._trace_t)[start:]
+            v = list(self._trace_v)[start:]
+            return {
+                "running": self._trace is not None,
+                "x": tr.get("x"),
+                "y": tr.get("y"),
+                "radius": tr.get("radius"),
+                "t": [round(x, 4) for x in t],
+                "v": [round(x, 3) for x in v],
+                "next": self._trace_count,
+            }
 
     # =========================
     # API: Processing Control

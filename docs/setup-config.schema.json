@@ -57,7 +57,56 @@
           "type": "null"
         }
       ],
-      "description": "Persisted settings for the FLIM LABS bridge (remote flim-imager server host/port, laser sync, channels, calibration reference, galvo-sync options). Free-form dict written by GalvoScannerController.setFlimLabsConfig; ``null`` when nothing has been saved. Note: this is the *browser-side* bridge panel's state. To use the FLIM card as a regular 2D detector from the backend (ExperimentController, autofocus, snap), add a ``FLIMLabsDetectorManager`` entry under ``detectors`` instead — see that manager's docstring for the property list."
+      "description": "Persisted settings for the FLIM LABS bridge (remote flim-imager server host/port, laser sync, channels, calibration reference, galvo-sync options). Free-form dict written by GalvoScannerController.setFlimLabsConfig; ``null`` when nothing has been saved. Note: this is the *browser-side* bridge panel's state. To use the FLIM card as a regular 2D detector from the backend (ExperimentController, autofocus, snap), add a ``FLIMLabsDetectorManager`` entry under ``detectors`` instead \u2014 see that manager's docstring for the property list."
+    },
+    "pumps": {
+      "type": "object",
+      "additionalProperties": {
+        "$ref": "#/$defs/PeripheralInfo"
+      },
+      "description": "Pumps by name: ``LaserPumpManager`` (speed as a PWM value on a laser channel), ``PositionerPumpManager`` (a stepper axis of a positioner), ``VirtualPumpManager``. Volumes in \u00b5L, rates in \u00b5L/min; Aufgaben jobs drive them with pump_volume / pump_run."
+    },
+    "valves": {
+      "type": "object",
+      "additionalProperties": {
+        "$ref": "#/$defs/PeripheralInfo"
+      },
+      "description": "Valves by name: ``LaserValveManager`` (a PWM value per position on a laser channel), ``DigitalOutValveManager`` (board outputs), ``VirtualValveManager``; ``managerProperties.positions`` names the positions a job can switch to."
+    },
+    "processing": {
+      "anyOf": [
+        {
+          "type": "object",
+          "additionalProperties": {}
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "description": "Processing options. ``{\"workerUrl\": \"http://lab-pc:8090\"}`` sends deconvolution jobs to a processing worker (uc2-deconvolution, image ghcr.io/openuc2/uc2-deconvolution); set it with ProcessingController.setProcessingWorker. Without it, ImSwitch uses IMSWITCH_PROCESSING_WORKER_URL (os-rpi sets it for the worker it runs beside ImSwitch)."
+    },
+    "aufgaben": {
+      "anyOf": [
+        {
+          "type": "object",
+          "additionalProperties": {}
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "description": "Aufgaben options. ``{\"allowScripts\": true}`` offers the python_script and external_process steps (unsandboxed code; a run with them must be confirmed)."
+    },
+    "digitalIO": {
+      "anyOf": [
+        {
+          "$ref": "#/$defs/DigitalIOInfo"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "description": "Names for the board's digital outputs and inputs; without it jobs use the raw lines \"1\"..\"3\"."
     },
     "rs232devices": {
       "type": "object",
@@ -146,6 +195,28 @@
         }
       ],
       "description": "lighthseet settings. Required to be defined to use Lightsheet functionality."
+    },
+    "opm": {
+      "anyOf": [
+        {
+          "$ref": "#/$defs/OPMInfo"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "description": "dvOPM digital twin settings (OPMController); defaults apply when missing."
+    },
+    "spectrometer": {
+      "anyOf": [
+        {
+          "$ref": "#/$defs/SpectrometerInfo"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "description": "Grating spectrometer (SpectrometerController); defaults apply when missing."
     },
     "webrtc": {
       "anyOf": [
@@ -404,6 +475,18 @@
       ],
       "description": "Overview-camera slide registration config (per camera/layout, including stage XYZ positions and homographies). Persisted by ExperimentController."
     },
+    "frameCalibration": {
+      "anyOf": [
+        {
+          "type": "object",
+          "additionalProperties": {}
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "description": "One-button FRAME calibration: {\"settings\": {...}, \"result\": {...}} (overview homography, placement, last report). Persisted by FrameCalibrationController."
+    },
     "pulseStreamer": {
       "$ref": "#/$defs/PulseStreamerInfo",
       "description": "Pulse Streamer settings."
@@ -545,7 +628,7 @@
         "defaultStreamSettings": {
           "type": "object",
           "additionalProperties": {},
-          "description": "Optional per-detector defaults for the live stream applied at startup. Recognised top-level keys (all optional): - ``protocol``: ``\"binary\" | \"jpeg\" | \"mjpeg\" | \"webrtc\"`` - ``subsampling_factor``: int >= 1 - ``throttle_ms``: int - ``jpeg_quality``: int (0..100, JPEG-specific) - ``compression_algorithm``: ``\"lz4\" | \"zstd\" | ...`` (binary-specific) - ``compression_level``: int (binary-specific) - ``crop_size``: [width, height] or null These are baked into the per-detector params on first stream start, so the live view comes up with a sensible default per camera (e.g. heavy subsampling on a large overview camera, lossless binary on a widefield sensor). The frontend cannot mutate these — it can only override the *current* session via ``setStreamParameters``/``setDetectorStreamParameters``."
+          "description": "Optional per-detector defaults for the live stream applied at startup. Recognised top-level keys (all optional): - ``protocol``: ``\"binary\" | \"jpeg\" | \"mjpeg\" | \"webrtc\"`` - ``subsampling_factor``: int >= 1 - ``throttle_ms``: int - ``jpeg_quality``: int (0..100, JPEG-specific) - ``compression_algorithm``: ``\"lz4\" | \"zstd\" | ...`` (binary-specific) - ``compression_level``: int (binary-specific) - ``crop_size``: [width, height] or null These are baked into the per-detector params on first stream start, so the live view comes up with a sensible default per camera (e.g. heavy subsampling on a large overview camera, lossless binary on a widefield sensor). The frontend cannot mutate these \u2014 it can only override the *current* session via ``setStreamParameters``/``setDetectorStreamParameters``."
         }
       }
     },
@@ -761,47 +844,94 @@
         "managerProperties"
       ]
     },
-    "SLMInfo": {
+    "PeripheralInfo": {
       "type": "object",
       "properties": {
-        "monitorIdx": {
-          "type": "integer",
-          "description": "Index of the monitor in the system list of monitors (indexing starts at 0)."
-        },
-        "width": {
-          "type": "integer",
-          "description": "Width of SLM, in pixels."
-        },
-        "height": {
-          "type": "integer",
-          "description": "Height of SLM, in pixels."
-        },
-        "wavelength": {
-          "type": "integer",
-          "description": "Wavelength of the laser line used with the SLM."
-        },
-        "pixelSize": {
-          "type": "number",
-          "description": "Pixel size or pixel pitch of the SLM, in millimetres."
-        },
-        "angleMount": {
-          "type": "number",
-          "description": "The angle of incidence and reflection of the laser line that is shaped by the SLM, in radians. For adding a blazed grating to create off-axis holography."
-        },
-        "correctionPatternsDir": {
+        "managerName": {
           "type": "string",
-          "description": "Directory of .bmp images provided by Hamamatsu for flatness correction at various wavelengths. A combination will be chosen based on the wavelength."
+          "description": "Manager class name, e.g. ``LaserPumpManager`` or ``LaserValveManager``."
+        },
+        "managerProperties": {
+          "type": "object",
+          "additionalProperties": {},
+          "description": "Properties to be read by the manager (see each manager's docstring)."
         }
       },
       "required": [
-        "monitorIdx",
-        "width",
-        "height",
-        "wavelength",
-        "pixelSize",
-        "angleMount",
-        "correctionPatternsDir"
+        "managerName"
       ]
+    },
+    "DigitalIOInfo": {
+      "type": "object",
+      "properties": {
+        "outputs": {
+          "type": "object",
+          "additionalProperties": {
+            "type": "integer"
+          },
+          "description": "Output name -> board output id (1..3), e.g. ``{\"shutter\": 1}``."
+        },
+        "inputs": {
+          "type": "object",
+          "additionalProperties": {
+            "type": "integer"
+          },
+          "description": "Input name -> board input id (1..3), e.g. ``{\"door\": 2}``."
+        },
+        "invert": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          },
+          "description": "Names of active-low lines; they read and write as logical levels."
+        },
+        "rs232device": {
+          "type": "string",
+          "description": "The board's ``rs232devices`` entry.",
+          "default": "ESP32"
+        }
+      }
+    },
+    "SLMInfo": {
+      "type": "object",
+      "properties": {
+        "display": {
+          "type": "string",
+          "description": "Output backend: \"virtual\" (nothing shown; tests and the virtual microscope), \"framebuffer\" (Linux /dev/fb<displayIndex>, the Raspberry Pi HDMI output, no X needed) or \"window\" (fullscreen window on monitor displayIndex; needs pygame-ce).",
+          "default": "virtual"
+        },
+        "displayIndex": {
+          "type": "integer",
+          "description": "Framebuffer number or monitor index (0 = primary, 1 = first external).",
+          "default": 0
+        },
+        "width": {
+          "type": "integer",
+          "description": "Pattern width in pixels. Once the output is open its real size wins.",
+          "default": 1920
+        },
+        "height": {
+          "type": "integer",
+          "description": "Pattern height in pixels.",
+          "default": 1080
+        },
+        "settleTimeMs": {
+          "type": "number",
+          "description": "Wait after a new frame before the camera is triggered: display latency plus the DMD/SLM refresh. Too short and the previous pattern is imaged.",
+          "default": 50.0
+        },
+        "calibrationDetector": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "description": "Camera used for the automatic camera<->display calibration; None = the current one."
+        }
+      }
     },
     "UC2ConfigInfo": {
       "type": "object",
@@ -821,6 +951,28 @@
             }
           ],
           "description": "Firmware server (serves the images + version.json). None = the Docker default http://host.docker.internal/firmware."
+        },
+        "firmwareRelease": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "description": "Take the firmware from a GitHub release of firmwareGithubRepo instead of the firmware server: \"latest\" (newest release with images, pre-releases included) or a tag such as \"v2026.0.0-beta.4\". None = the firmware server."
+        },
+        "firmwareGithubRepo": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "description": "Repository whose releases firmwareRelease refers to. None = youseetoo/uc2-esp32."
         }
       }
     },
@@ -968,8 +1120,16 @@
         "objectivePositions": {
           "type": "array"
         },
+        "immersions": {
+          "type": "array",
+          "description": "Immersion per slot as OME names: Air, Water, WaterDipping, Oil, Glycerol, Multi, Other. Written into every image file with NA, magnification and name; empty: guessed from the NA."
+        },
         "zPositions": {
           "type": "array"
+        },
+        "xyOffsets": {
+          "type": "array",
+          "description": "Parcentricity per slot (\u00b5m, stage XY). Switching slots moves XY by the difference, together with the relative Z move (i.e. unless skipZ)."
         },
         "homeDirection": {
           "type": "integer",
@@ -1015,6 +1175,187 @@
     "LightsheetInfo": {
       "type": "object",
       "properties": {}
+    },
+    "OPMInfo": {
+      "type": "object",
+      "properties": {
+        "positioner": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "description": "Positioner for axes given without a name; default the first one."
+        },
+        "detector": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "description": "Camera for the scan; default the first one."
+        },
+        "axisMap": {
+          "type": "object",
+          "additionalProperties": {
+            "type": "string"
+          },
+          "description": "Model axis -> stage axis: \"X\", \"-X\" (opposite direction), \"LaunchStage.Z\" or \"\" (set by hand). Model axes: sample.X/Y/Z, launch.x/y/z/phi_deg/focus."
+        },
+        "detection": {
+          "type": "object",
+          "additionalProperties": {
+            "type": "number"
+          },
+          "description": "Overrides of the detection model: M, alpha_deg, pixel_um (sensor pitch times binning), sensor_tilted_mm, sensor_flat_mm."
+        },
+        "dish": {
+          "type": "object",
+          "additionalProperties": {
+            "type": "number"
+          },
+          "description": "Overrides of the dish model: n_glass, t_glass_mm, G0_mm."
+        },
+        "tiltedAxis": {
+          "type": "integer",
+          "description": "Image axis along the tilted sensor direction: 0 rows, 1 columns.",
+          "default": 0
+        }
+      }
+    },
+    "SpectrometerInfo": {
+      "type": "object",
+      "properties": {
+        "detector": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "description": "Camera behind the grating; default the first one."
+        },
+        "name": {
+          "type": "string",
+          "description": "Names the settings/calibration file <config>/spectrometer/<name>.json.",
+          "default": "spectrometer"
+        },
+        "processing": {
+          "type": "object",
+          "additionalProperties": {},
+          "description": "Start values of the processing: rowStart, rowStop, colStart, colStop, collapse, nAverage, removeSpikes, spikeThreshold, subtractDark, smileCorrection."
+        },
+        "design": {
+          "type": "object",
+          "additionalProperties": {},
+          "description": "Nominal optics: grooveDensityPerMm, diffractionOrder, deviationDeg, cameraFocalLengthMm, collimatorFocalLengthMm, pixelPitchUm, sensorWidthPx, slitWidthUm, wavelengthDecreasesWithPixel, centerWavelengthNm, leverArmMm. Default: openRAMAN block."
+        },
+        "laserWavelengthNm": {
+          "anyOf": [
+            {
+              "type": "number"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "description": "Excitation laser for the Raman-shift axis (cm^-1)."
+        },
+        "ledMatrix": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "description": "LED matrix (NeoPixel ring) whose R, G, B channels calibrate; default the first one."
+        },
+        "ledIntensity": {
+          "type": "integer",
+          "description": "Channel value (0..255) while an LED channel is measured.",
+          "default": 64
+        },
+        "referenceSpectraFile": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "description": "JSON or CSV with the ring's R, G, B spectra measured on another spectrometer (relative paths: in <config>/spectrometer). Without it, placeholders are used."
+        },
+        "calibrationLasers": {
+          "anyOf": [
+            {
+              "type": "array",
+              "items": {
+                "type": "string"
+              }
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "description": "Lasers offered as calibration lines; default every laser with a wavelength."
+        },
+        "laserPowerFraction": {
+          "type": "number",
+          "description": "Laser value during calibration, as a fraction of its range.",
+          "default": 0.05
+        },
+        "manualSources": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "additionalProperties": {}
+          },
+          "description": "Sources switched by hand: {id, label, kind, wavelengthNm, sigmaNm} for a laser, {id, label, kind: \"lamp\", lineList: \"neon\" | \"mercury\"} for a lamp."
+        },
+        "alignmentTargetNm": {
+          "anyOf": [
+            {
+              "type": "number"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "description": "Wavelength that should sit on the camera axis after alignment (Raman: 592.4)."
+        },
+        "bitDepthParameter": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "description": "Detector parameter that switches the bit depth, if the camera has one."
+        },
+        "simulate": {
+          "type": "boolean",
+          "description": "Render frames with the built-in simulator instead of reading the camera.",
+          "default": false
+        },
+        "simulation": {
+          "type": "object",
+          "additionalProperties": {},
+          "description": "Simulator settings (rows, cols, focalLengthMm, centerNm, smileBowPx, ...)."
+        }
+      }
     },
     "GalvoScannerInfo": {
       "type": "object",
@@ -1198,7 +1539,7 @@
             "type": "object",
             "additionalProperties": {}
           },
-          "description": "Per-detector affine calibration data, keyed by detector name. Format: { \"<detectorName>\": { \"affine_matrix\": [[a11, a12, tx], [a21, a22, ty]], # 2x3 matrix \"metrics\": {...}, # scale_x_um_per_pixel, scale_y_um_per_pixel, ... \"timestamp\": \"...\", \"detector_name\": \"<detectorName>\" } } The affine matrix transforms pixel coordinates to stage coordinates: [stage_x] [a11 a12 tx] [pixel_x] [stage_y] = [a21 a22 ty] × [pixel_y] [ 1 ] Sign of metrics.scale_x_um_per_pixel / scale_y_um_per_pixel encodes flip (negative => flip on that axis)."
+          "description": "Per-detector affine calibration data, keyed by detector name. Format: { \"<detectorName>\": { \"affine_matrix\": [[a11, a12, tx], [a21, a22, ty]], # 2x3 matrix \"metrics\": {...}, # scale_x_um_per_pixel, scale_y_um_per_pixel, ... \"timestamp\": \"...\", \"detector_name\": \"<detectorName>\" } } The affine matrix transforms pixel coordinates to stage coordinates: [stage_x] [a11 a12 tx] [pixel_x] [stage_y] = [a21 a22 ty] \u00d7 [pixel_y] [ 1 ] Sign of metrics.scale_x_um_per_pixel / scale_y_um_per_pixel encodes flip (negative => flip on that axis)."
         },
         "defaultAffineMatrix": {
           "type": "array",
@@ -1435,7 +1776,7 @@
         },
         "scaleUmPerUnit": {
           "type": "number",
-          "description": "Microns of Z per unit of controller output. Only used until a calibration has run — after that the measured sensitivity replaces it.",
+          "description": "Microns of Z per unit of controller output. Only used until a calibration has run \u2014 after that the measured sensitivity replaces it.",
           "default": 100.0
         },
         "minStepThreshold": {
@@ -1524,6 +1865,80 @@
           "type": "string",
           "description": "Vendor URL reported in SiLA2 service discovery.",
           "default": "https://openuc2.com"
+        },
+        "serverUUID": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "description": "SiLA server UUID. None = derived from hostname and setup file, stable across restarts."
+        },
+        "discovery": {
+          "type": "boolean",
+          "description": "Announce the server over mDNS (SiLA discovery), so a workcell finds it by UUID.",
+          "default": true
+        },
+        "tls": {
+          "type": "boolean",
+          "description": "Serve SiLA over TLS. Needs certificateChain and privateKey.",
+          "default": false
+        },
+        "certificateChain": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "description": "Path to (or PEM text of) the server certificate chain, for tls."
+        },
+        "privateKey": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "description": "Path to (or PEM text of) the server private key, for tls."
+        },
+        "cloudEndpoint": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "description": "UniteLabs cloud endpoint hostname (no https://). None = local network only."
+        },
+        "cloudPort": {
+          "type": "integer",
+          "description": "Port of the cloud endpoint (TLS).",
+          "default": 443
+        },
+        "handoverPositionName": {
+          "type": "string",
+          "description": "Name of the plate hand-over position (LabwareTransferSiteController).",
+          "default": "Stage"
+        },
+        "plateOrigins": {
+          "type": "object",
+          "additionalProperties": {
+            "type": "array",
+            "items": {
+              "type": "number"
+            }
+          },
+          "description": "Plate origins taught with SetPlateOrigin: labware load name -> [dx, dy] \u00b5m, so that stage = well position in the labware definition + (dx, dy)."
         }
       }
     },

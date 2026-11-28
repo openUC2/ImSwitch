@@ -6,6 +6,7 @@ import path from "path";
 
 import de from "../i18n/de";
 import { translate } from "../i18n";
+import { GUIDES, LAYOUTS } from "../components/holo/holoGuides";
 
 describe("translate", () => {
   it("returns the German string for a known key", () => {
@@ -29,19 +30,29 @@ describe("translate", () => {
 });
 
 describe("German catalog coverage", () => {
-  // The hologram app is the screen we promised in both languages.
-  const source = fs.readFileSync(
-    path.join(__dirname, "../components/HoloController.js"),
-    "utf8",
-  );
+  // The hologram apps are the screens we promised in both languages.
+  const files = [
+    "../components/HoloController.js",
+    "../components/OffAxisHoloController.js",
+    ...fs.readdirSync(path.join(__dirname, "../components/holo")).map((f) => `../components/holo/${f}`),
+  ];
+  const literalsOf = (file) =>
+    [...fs.readFileSync(path.join(__dirname, file), "utf8")
+      .matchAll(/\bt\(\s*(?:"((?:[^"\\]|\\.)*)"|'((?:[^'\\]|\\.)*)')/g)]
+      .map((m) => (m[1] !== undefined ? m[1] : m[2]).replace(/\\(.)/g, "$1"));
 
-  it("covers every literal HoloController passes to t()", () => {
-    const literals = [
-      ...source.matchAll(/\bt\(\s*(?:"((?:[^"\\]|\\.)*)"|'((?:[^'\\]|\\.)*)')/g),
-    ].map((m) => (m[1] !== undefined ? m[1] : m[2]).replace(/\\(.)/g, "$1"));
+  it("covers every literal the hologram apps pass to t()", () => {
+    expect(literalsOf(files[0]).length).toBeGreaterThan(50); // the regex still finds them
+    const missing = files.flatMap((f) => literalsOf(f).filter((s) => !(s in de)).map((s) => `${f}: ${s}`));
+    expect(missing).toEqual([]);
+  });
 
-    expect(literals.length).toBeGreaterThan(50); // the regex still finds them
-    expect(literals.filter((s) => !(s in de))).toEqual([]);
+  it("covers the build guides", () => {
+    const strings = [
+      ...Object.values(LAYOUTS).flatMap((l) => l.cells.map((c) => c[2])),
+      ...Object.values(GUIDES).flatMap((g) => [g.title, g.intro, ...g.parts, ...g.steps.map((x) => x[1]), ...g.tips]),
+    ];
+    expect(strings.filter((s) => !(s in de))).toEqual([]);
   });
 
   it("keeps the placeholders of every translated string", () => {

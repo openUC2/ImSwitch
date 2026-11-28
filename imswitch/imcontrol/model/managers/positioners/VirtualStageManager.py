@@ -27,6 +27,10 @@ class VirtualStageManager(PositionerManager):
         }
         # Travel limits (no-go area), device frame, as on ESP32StageManager
         self._initTravelLimits(positionerInfo.managerProperties, ("X", "Y", "Z", "A"))
+        # Sample loading (plate hand-over) position, device frame, as on ESP32StageManager
+        self.sampleLoadingPositions = {
+            ax: float(positionerInfo.managerProperties.get(f"sampleLoadingPosition{ax}", 0))
+            for ax in ("X", "Y", "Z")}
         # Simulated strobed sweep (see startStrobeSweep).
         self._strobeCallbacks = []
         self._strobeThread = None
@@ -45,6 +49,12 @@ class VirtualStageManager(PositionerManager):
 
         # get bootup position and write to GUI
         self._position = self.getPosition()
+
+    def moveToSampleLoadingPosition(self, speed=10000, is_blocking=True):
+        """Move to the sample loading position (device frame, like ESP32StageManager)."""
+        target = [self.sampleLoadingPositions[ax] - float(self.stageOffsetPositions.get(ax, 0))
+                  for ax in ("X", "Y", "Z")]
+        self.move(value=target, axis="XYZ", is_absolute=True, is_blocking=is_blocking, speed=speed)
 
     @property
     def combinedAxes(self):

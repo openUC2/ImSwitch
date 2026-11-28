@@ -233,7 +233,10 @@ function processScanPoint(point, pointIndex, experimentState, objectiveState, we
   const bounds = calculateBounds(orderedPositions);
 
   return {
-    areaId: `area_${pointIndex}`,
+    // A point that names its group keeps that id as its area id, as a merged
+    // group does (buildMergedScanArea): its focus points, plate-map preview and
+    // the backend's region all refer to it by that name.
+    areaId: point.groupId || `area_${pointIndex}`,
     areaName: areaName,
     areaType: areaType,
     wellId: wellId,

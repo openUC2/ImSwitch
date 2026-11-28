@@ -93,8 +93,8 @@ dependencies = [
     # the Deconvolve recipe and worker (ProcessingController). A git URL until it is on PyPI;
     # PyPI refuses uploads that depend on URLs, so change it to "uc2-deconvolution>=0.1" then.
     "uc2-deconvolution @ git+https://github.com/openUC2/uc2-deconvolution@v0.1.0",
-    "unitelabs-sila",
-    "unitelabs-cdk",
+    "unitelabs-sila>=0.14,<0.15",  # SiLA 2 client/server (the namespace client API needs >=0.12)
+    "unitelabs-cdk>=0.18,<0.19",  # SiLA 2 connector for the UniteLabs workcell (SiLa2Controller)
     "pip>=26.1",
     # Exactly ONE OpenCV wheel: all variants install into the same cv2/ folder and
     # overwrite each other. contrib-headless is the superset without Qt/GUI.
@@ -138,6 +138,7 @@ Homepage = "https://github.com/openuc2/ImSwitch"
 
 [project.scripts]
 imswitch = "imswitch.__main__:main"
+imswitch-sila-check = "imswitch.sila_check:main"
 
 [tool.setuptools.packages.find]
 include = ["imswitch*"]

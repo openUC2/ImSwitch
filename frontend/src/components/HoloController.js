@@ -51,6 +51,8 @@ import {
   PhotoCamera as PhotoCameraIcon,
   DeleteOutline as DeleteOutlineIcon,
   MenuBook as MenuBookIcon,
+  Science as ScienceIcon,
+  School as SchoolIcon,
 } from "@mui/icons-material";
 
 // Redux slice
@@ -81,6 +83,9 @@ import apiInLineHoloControllerSetBgEnabled from "../backendapi/apiInLineHoloCont
 import apiInLineHoloControllerReconstructHighQuality from "../backendapi/apiInLineHoloControllerReconstructHighQuality";
 import apiLiveViewControllerGetStreamParameters from "../backendapi/apiLiveViewControllerGetStreamParameters";
 import FreeNumberField from "./FreeNumberField";
+import HoloSnapshot from "./holo/HoloSnapshot";
+import HoloSimulator from "./holo/HoloSimulator";
+import HoloTutorial from "./holo/HoloTutorial";
 import { useT } from "../i18n";
 
 // One control for "what colour am I illuminating with": picking an entry sets
@@ -150,7 +155,7 @@ const HoloController = () => {
   // user-initiated restarts.
   const [streamNonce, setStreamNonce] = useState(0);
 
-  // Tabs: 0 = Live, 1 = Background, 2 = Refine (HQ)
+  // Tabs: 0 = Live, 1 = Background, 2 = Refine (HQ), 3 = Snapshot, 4 = Simulate, 5 = Learn
   const [activeTab, setActiveTab] = useState(0);
   // Background acquisition UI
   const [bgNumFrames, setBgNumFrames] = useState(20);
@@ -1278,6 +1283,9 @@ const HoloController = () => {
           label={holoState.hasBackground ? `${t("Background")} ●` : t("Background")}
         />
         <Tab icon={<AutoAwesomeIcon />} iconPosition="start" label={t("Refine (HQ)")} />
+        <Tab icon={<PhotoCameraIcon />} iconPosition="start" label={t("Snapshot")} />
+        <Tab icon={<ScienceIcon />} iconPosition="start" label={t("Simulate")} />
+        <Tab icon={<SchoolIcon />} iconPosition="start" label={t("Learn")} />
       </Tabs>
 
       {activeTab === 0 && (
@@ -2337,6 +2345,25 @@ const HoloController = () => {
           </Card>
         </>
       )}
+
+      {activeTab === 3 && (
+        <HoloSnapshot
+          mode="inline"
+          baseUrl={baseUrl}
+          detectorName={holoState.cameraName}
+          defaultWavelength={holoState.wavelength}
+          defaultPixelsize={holoState.pixelsize}
+          defaultDz={holoState.dz}
+        />
+      )}
+      {activeTab === 4 && (
+        <HoloSimulator
+          initialMode="inline"
+          defaultPixelUm={Math.round(holoState.pixelsize * 1e8) / 100}
+          defaultWavelengthNm={Math.round(holoState.wavelength * 1e9)}
+        />
+      )}
+      {activeTab === 5 && <HoloTutorial initialTopic="inline" docsUrl={docsUrl} />}
     </Box>
   );
 };

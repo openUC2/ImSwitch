@@ -36,8 +36,9 @@ import ObjectiveDimension from "./ObjectiveDimension";
 // Utilities
 import * as coordinateCalculator from "../CoordinateCalculator";
 import {
-  generateGridForBounds,
   filterRemovedPlannedPoints,
+  ownFocusPoints,
+  plannedPointsForAreas,
 } from "./plannedFocusGrid";
 import InfoPopup from "../InfoPopup";
 
@@ -374,26 +375,22 @@ const ExperimentDesigner = () => {
     });
 
     // Curated automatic focus grid: apply the planned-point deletions made in
-    // the Focus Map panel to this run's focus-map phase as well. Regions whose
-    // group id matches use exactly the kept points; others (e.g. the merged
-    // "global" grid) keep the default generated grid.
+    // the Focus Map panel to this run's focus-map phase as well, and use the
+    // points an area brings along (tissue found on the prescan) instead of a
+    // grid over its bounds. Once any points are sent the backend measures only
+    // those, so every area is listed: its own points, else its grid.
     let focusMapGridPoints = null;
+    const hasOwnPoints = Object.keys(ownFocusPoints(experimentState.pointList)).length > 0;
     if (
       focusMapConfig.enabled &&
       !focusMapConfig.use_manual_map &&
-      plannedRemovedKeys.length > 0
+      (plannedRemovedKeys.length > 0 || hasOwnPoints)
     ) {
-      const planned = [];
-      (scanConfig.scanAreas || []).forEach((area) => {
-        generateGridForBounds(
-          area.bounds,
-          focusMapConfig.rows,
-          focusMapConfig.cols,
-          focusMapConfig.add_margin,
-        ).forEach(([x, y]) =>
-          planned.push({ x, y, groupId: area.areaId }),
-        );
-      });
+      const planned = plannedPointsForAreas(
+        scanConfig.scanAreas,
+        experimentState.pointList,
+        focusMapConfig,
+      );
       const kept = filterRemovedPlannedPoints(planned, plannedRemovedKeys);
       if (kept.length > 0) {
         focusMapGridPoints = kept.map((p) => ({

@@ -23,6 +23,11 @@ def loadSetupInfo(options, setupInfoType):
     # if options.setupFileName contains absolute path, don't concatenate
     if os.path.isabs(options.setupFileName):
         mPath = options.setupFileName
+    elif os.path.isfile(options.setupFileName):
+        # A path relative to the working directory, as typed after --config-file.
+        # Joining it to the setups folder and then falling back to a file of the
+        # same name there loaded a different, stale setup without a word.
+        mPath = os.path.abspath(options.setupFileName)
     else:
         mPath = os.path.join(_setupFilesDir, options.setupFileName)
     print("Loading setup info from: " + mPath)

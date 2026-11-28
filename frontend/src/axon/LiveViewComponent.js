@@ -539,12 +539,26 @@ const LiveViewComponent = ({
     [onDoubleClick, getAdaptivePixelSize, moveToPosition, objectiveState.fovX],
   );
 
-  // Calculate scale bar dimensions - using adaptive pixel size
-  const scaleBarPx = 50;
+  // Scale bar. adaptivePixelSize is µm per *canvas* pixel; the canvas is drawn
+  // scaled to fit its box, so the bar works in screen (CSS) pixels: a round
+  // length (1-2-5 steps) about 100 px long. Multiplying a fixed 50 px by the
+  // canvas pixel size labelled the bar 2-4x too short.
   const adaptivePixelSize = getAdaptivePixelSize();
-  const scaleBarMicrons = adaptivePixelSize
-    ? (scaleBarPx * adaptivePixelSize).toFixed(2)
-    : null;
+  const canvasEl = canvasRef.current;
+  const shownWidth = canvasEl ? canvasEl.getBoundingClientRect().width : 0;
+  const umPerScreenPx =
+    adaptivePixelSize && canvasEl && canvasEl.width > 0 && shownWidth > 0
+      ? (adaptivePixelSize * canvasEl.width) / shownWidth
+      : null;
+  let scaleBarPx = 0;
+  let scaleBarMicrons = null;
+  if (umPerScreenPx) {
+    const target = 100 * umPerScreenPx;
+    const decade = Math.pow(10, Math.floor(Math.log10(target)));
+    const nice = [1, 2, 5, 10].map((m) => m * decade).filter((v) => v <= target).pop() || decade;
+    scaleBarPx = nice / umPerScreenPx;
+    scaleBarMicrons = nice >= 1000 ? `${nice / 1000} mm` : `${nice} µm`;
+  }
 
   return (
     <Box
@@ -610,7 +624,7 @@ const LiveViewComponent = ({
               mr: 2,
             }}
           />
-          <Typography variant="body2">{scaleBarMicrons} µm</Typography>
+          <Typography variant="body2">{scaleBarMicrons}</Typography>
         </Box>
       )}
     </Box>

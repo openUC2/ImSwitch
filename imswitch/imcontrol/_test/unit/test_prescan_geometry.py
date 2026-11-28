@@ -205,8 +205,10 @@ def _recording_controller(pixel_size=1.0):
     c._addStrip = lambda strip, minX, maxX, y, pixelSize: c.strips.append((y, strip.copy()))
     for name in ("_prescanLoop", "_enterPrescanOptics", "_restorePrescanOptics",
                  "_objectiveController", "_placeSweep", "_spreadSamples",
-                 "_calibratePrescanLag"):
+                 "_calibratePrescanLag", "_placeLine", "_lagFromNeighbour",
+                 "_placeAndKeep", "_coarseSweep", "_placeAgain"):
         setattr(c, name, types.MethodType(getattr(StageMapController, name), c))
+    c.PRESCAN_REPLACE_LAG_S = StageMapController.PRESCAN_REPLACE_LAG_S
     return c
 
 

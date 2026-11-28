@@ -390,7 +390,8 @@
         "omeroEnabled": false,
         "omeroConnectionTimeout": 30,
         "omeroUploadTimeout": 300,
-        "overviewCameraName": "ObservationCamera"
+        "overviewCameraName": "ObservationCamera",
+        "scanSpeedXY": 80000
     },
     "uc2Config": null,
     "ism": null,
@@ -409,7 +410,15 @@
         "syncInAsync": true,
         "deconvolveActionHash": "c58c90edbf6e208e3deafdd6f885553d6e027573f0ddc3b59ced3911f016ef4f"
     },
-    "sila2": null,
+      "sila2": {
+    "enabled": true,
+    "serverName": "OpenUC2 ImSwitch",
+    "serverDescription": "SiLA2 server for OpenUC2 ImSwitch microscope control",
+    "serverHost": "0.0.0.0",
+    "serverPort": 50052,
+    "serverVersion": "0.1.0",
+    "vendorUrl": "https://openuc2.com"
+  },
     "fovLock": null,
     "autofocus": null,
     "scan": null,
@@ -951,7 +960,8 @@
         "LiveView",
         "Demo",
         "Arkitekt",
-        "StageCenterCalibration"
+        "StageCenterCalibration", 
+        "SiLa2"
     ],
     "hypha": null,
     "HistoScan": null,

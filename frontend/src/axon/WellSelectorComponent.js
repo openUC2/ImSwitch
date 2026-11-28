@@ -13,6 +13,8 @@ import * as positionSlice from "../state/slices/PositionSlice.js";
 import * as overviewRegSlice from "../state/slices/OverviewRegistrationSlice.js";
 import * as objectiveSlice from "../state/slices/ObjectiveSlice.js";
 import * as stageMapSlice from "../state/slices/StageMapSlice.js";
+import * as focusMapSlice from "../state/slices/FocusMapSlice.js";
+import { getParameterRangeState } from "../state/slices/ParameterRangeSlice";
 import apiGetOverviewOverlayData from "../backendapi/apiGetOverviewOverlayData.js";
 import { apiStageMapGetTiles } from "../backendapi/apiStageMapController.js";
 
@@ -47,14 +49,17 @@ import PanToolIcon from "@mui/icons-material/PanTool";
 import ScatterPlotIcon from "@mui/icons-material/ScatterPlot";
 import AddLocationIcon from "@mui/icons-material/AddLocation";
 import BlurLinearIcon from "@mui/icons-material/BlurLinear";
+import BiotechIcon from "@mui/icons-material/Biotech";
 import LayersIcon from "@mui/icons-material/Layers";
 import {
   apiStageMapClear,
+  apiStageMapDetectTissue,
   apiStageMapGetParams,
   apiStageMapSetParams,
   apiStageMapStartPrescan,
   apiStageMapStopPrescan,
 } from "../backendapi/apiStageMapController";
+import { slideSlots, tissueAreaPoints, replacedByTissue } from "./tissueAreas.js";
 
 // The tool buttons wrap into several rows and some tips are long, so a tip
 // must not pop up while the pointer merely crosses a button, must close as soon
@@ -386,8 +391,9 @@ const WellSelectorComponent = () => {
     const xs = [];
     const ys = [];
     (experimentState.pointList || []).forEach((p) => {
-      xs.push(p.x - (p.rectMinusX || 0), p.x + (p.rectPlusX || 0));
-      ys.push(p.y - (p.rectMinusY || 0), p.y + (p.rectPlusY || 0));
+      // rectangles by their extents, circles (round wells) by their radii
+      xs.push(p.x - (p.rectMinusX || p.circleRadiusX || 0), p.x + (p.rectPlusX || p.circleRadiusX || 0));
+      ys.push(p.y - (p.rectMinusY || p.circleRadiusY || 0), p.y + (p.rectPlusY || p.circleRadiusY || 0));
       (p.neighborPointList || []).forEach((n) => {
         xs.push(n.x);
         ys.push(n.y);
@@ -507,6 +513,56 @@ const WellSelectorComponent = () => {
       .catch(() => infoPopupRef.current?.showMessage("Could not clear the overlay"));
   };
 
+  // ── Tissue on the prescan ─────────────────────────────────────────────
+  // The slide slots of the layout that the prescan covers are searched for
+  // tissue (StageMapController.detectTissue; in colour, pen ink is left out).
+  // Every region becomes a freehand area — tiled like a drawn one and re-tiled
+  // when the objective changes — with its autofocus points on the tissue, and
+  // the clear-glass spot becomes the shading (flat-field) reference.
+  const [detectingTissue, setDetectingTissue] = useState(false);
+  const prescanTiles = stageMapState?.tiles || [];
+  const handleDetectTissue = () => {
+    const slots = slideSlots(experimentState.wellLayout, prescanTiles);
+    // The overlap the run re-tiles the areas with (CoordinateCalculator), so
+    // the tiles shown now are the tiles scanned.
+    const overlap = wellSelectorState.areaSelectOverlap || 0;
+    setDetectingTissue(true);
+    apiStageMapDetectTissue({ slides: slots, overlap, includeOverview: false })
+      .then((res) => {
+        if (!res?.success) throw new Error(res?.error || "no answer");
+        const { points, ink, blank, warnings } = tissueAreaPoints(res, {
+          fovX: objectiveState?.fovX,
+          fovY: objectiveState?.fovY,
+          overlap,
+          z: positionState?.z ?? 0,
+          stamp: Date.now(),
+        });
+        // Earlier tissue areas, and the slide-wide selection the prescan was
+        // swept from, give way to the regions just found.
+        const drop = replacedByTissue(experimentState.pointList, slots);
+        drop.sort((a, b) => b - a).forEach((index) => dispatch(experimentSlice.removePoint(index)));
+        points.forEach((p) => dispatch(experimentSlice.createPoint(p)));
+        if (blank) {
+          dispatch(experimentSlice.setFlatFieldSpot(blank));
+          dispatch(experimentSlice.setFlatField(true));
+        }
+        // The regions' focus points only count with the focus map on.
+        const focusPoints = points.reduce((n, p) => n + (p.focusPoints?.length || 0), 0);
+        if (focusPoints) dispatch(focusMapSlice.setFocusMapEnabled(true));
+        const lit = (experimentState.parameterValue?.illuIntensities || []).some((v) => v > 0);
+        const parts = [`${points.length} tissue region(s) added`];
+        if (focusPoints) parts.push(`focus map on, ${focusPoints} focus point(s) on the tissue`);
+        if (!lit) parts.push("no light is set under Channels: the scan keeps the light as it is now");
+        if (ink) parts.push(`${ink} pen mark(s) left out`);
+        if (!res.colour) parts.push("greyscale prescan: pen marks look like tissue, delete those areas");
+        if (blank) parts.push("shading correction on, reference on clear glass");
+        if (warnings.length) parts.push(warnings.join("; "));
+        infoPopupRef.current?.showMessage(parts.join(". ") + ".");
+      })
+      .catch((e) => infoPopupRef.current?.showMessage(`Tissue detection failed: ${e.message || e}`))
+      .finally(() => setDetectingTissue(false));
+  };
+
   // ── Boundary from dropped points (freehand mode) ─────────────────────
   const handleAddCurrentAsVertex = () => {
     childRef.current?.addFreehandVertex?.({
@@ -614,8 +670,10 @@ const WellSelectorComponent = () => {
       toggle: handleToggleStageMapOverlay,
     },
   ];
+  // Warn only above what this instrument was tested at (setup experiment.scanSpeedXY).
+  const instrumentSpeed = useSelector(getParameterRangeState)?.scanSpeedXY || 20000;
   const xySpeedTooHigh =
-    (parseFloat(wellSelectorState.moveCameraSpeedXY) || 0) > 20000;
+    (parseFloat(wellSelectorState.moveCameraSpeedXY) || 0) > Math.max(20000, instrumentSpeed);
 
   //##################################################################################
   return (
@@ -736,7 +794,7 @@ const WellSelectorComponent = () => {
         {wellSelectorState.mode === Mode.MOVE_CAMERA && (
           <>
             <TextField
-              label="XY speed (µm/s)"
+              label="XY speed"
               type="number"
               size="small"
               value={wellSelectorState.moveCameraSpeedXY ?? 20000}
@@ -749,8 +807,8 @@ const WellSelectorComponent = () => {
               error={xySpeedTooHigh}
               helperText={
                 xySpeedTooHigh
-                  ? "Above 20000 µm/s the stage may lose steps"
-                  : undefined
+                  ? `Faster than this instrument was tested at (${instrumentSpeed})`
+                  : "Stage units (UC2: steps/s)"
               }
               sx={{ width: 160 }}
             />
@@ -846,6 +904,23 @@ const WellSelectorComponent = () => {
             >
               {prescanRunning ? "Stop prescan" : "Prescan"}
             </Button>
+          </Tooltip>
+          <Tooltip
+            title="Find the tissue on the prescanned slides and add each section as a scan area, with autofocus points on the tissue. Pen marks are left out (colour prescan), and clear glass is used as the shading reference."
+            arrow
+          >
+            <span>
+              <Button
+                size="small"
+                variant="outlined"
+                color="success"
+                startIcon={<BiotechIcon />}
+                disabled={!prescanTiles.length || prescanRunning || detectingTissue}
+                onClick={handleDetectTissue}
+              >
+                {detectingTissue ? "Detecting…" : "Detect tissue"}
+              </Button>
+            </span>
           </Tooltip>
           <Tooltip
             title="Strobed prescan: the firmware triggers the camera and flashes the LED once per frame, so frames are sharp and placed where they were taken. Needs strobe-capable firmware; otherwise the prescan runs as usual and says why."

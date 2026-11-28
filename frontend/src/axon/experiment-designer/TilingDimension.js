@@ -25,6 +25,7 @@ import * as experimentSlice from "../../state/slices/ExperimentSlice";
 import * as experimentUISlice from "../../state/slices/ExperimentUISlice";
 import * as wellSelectorSlice from "../../state/slices/WellSelectorSlice";
 import * as focusMapSlice from "../../state/slices/FocusMapSlice";
+import { getParameterRangeState } from "../../state/slices/ParameterRangeSlice";
 import { DIMENSIONS } from "../../state/slices/ExperimentUISlice";
 import apiExperimentControllerGetCurrentExperimentParams from "../../backendapi/apiExperimentControllerGetCurrentExperimentParams";
 
@@ -44,6 +45,9 @@ const TilingDimension = () => {
   const experimentState = useSelector(experimentSlice.getExperimentState);
   const wellSelectorState = useSelector(wellSelectorSlice.getWellSelectorState);
   const focusMapConfig = useSelector(focusMapSlice.getFocusMapConfig);
+  // The instrument's tested XY speed (setup experiment.scanSpeedXY); a run
+  // with speed 0 uses it, and only faster settings are worth a warning.
+  const instrumentSpeed = useSelector(getParameterRangeState)?.scanSpeedXY || 20000;
   const parameterValue = experimentState.parameterValue;
   // When a focus map is active it drives Z per-XY, so the manual Z override is
   // meaningless – grey it out (the backend also ignores it in that case).
@@ -471,30 +475,34 @@ const TilingDimension = () => {
               </Box>
               <FormControl size="small" fullWidth sx={{ mt: 0.5 }}>
                 <Select
-                  value={parameterValue.speed || 20000}
+                  value={Number(parameterValue.speed) || 0}
                   onChange={(e) => {
                     const v = Number(e.target.value);
                     dispatch(experimentSlice.setSpeed(v));
                     // Keep the wellplate "Move Camera Speed" in sync so both
                     // controls always agree on the XY scan speed.
-                    dispatch(wellSelectorSlice.setMoveCameraSpeedXY(v));
+                    dispatch(wellSelectorSlice.setMoveCameraSpeedXY(v || instrumentSpeed));
                   }}
                 >
+                  <MenuItem value={0}>{`This instrument (${instrumentSpeed})`}</MenuItem>
                   {[10000, 20000, 30000, 40000, 50000, 60000, 70000, 80000].map((speed) => (
                     <MenuItem key={speed} value={speed}>
-                      {speed} µm/s
+                      {speed}
                     </MenuItem>
                   ))}
                 </Select>
               </FormControl>
-              {(parameterValue.speed || 20000) > 20000 && (
+              <Typography variant="caption" color="text.secondary" sx={{ display: "block", mt: 0.5 }}>
+                In the stage's units (UC2 stages: steps/s).
+              </Typography>
+              {(Number(parameterValue.speed) || 0) > Math.max(20000, instrumentSpeed) && (
                 <Typography
                   variant="caption"
                   color="error"
                   sx={{ display: "block", mt: 0.5 }}
                 >
-                  ⚠ Speeds above 20000 µm/s are highly unreliable — the stage may
-                  lose steps and positioning accuracy.
+                  ⚠ Faster than this instrument was tested at ({instrumentSpeed}): the stage
+                  may lose steps and positioning accuracy.
                 </Typography>
               )}
             </Box>

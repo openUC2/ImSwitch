@@ -17,6 +17,7 @@ import {
   FormControl,
   InputLabel,
   Divider,
+  Button,
 } from "@mui/material";
 import { useTheme, alpha } from "@mui/material/styles";
 import ExpandMoreIcon from "@mui/icons-material/ExpandMore";
@@ -26,6 +27,7 @@ import SpeedIcon from "@mui/icons-material/Speed";
 import WarningAmberIcon from "@mui/icons-material/WarningAmber";
 
 import * as experimentSlice from "../../state/slices/ExperimentSlice";
+import * as positionSlice from "../../state/slices/PositionSlice";
 import * as experimentUISlice from "../../state/slices/ExperimentUISlice";
 import { DIMENSIONS } from "../../state/slices/ExperimentUISlice";
 
@@ -45,6 +47,11 @@ const OutputDimension = () => {
   // Redux state
   const experimentState = useSelector(experimentSlice.getExperimentState);
   const parameterValue = experimentState.parameterValue;
+  const positionState = useSelector(positionSlice.getPositionState);
+  const flatFieldSpot =
+    parameterValue.flatFieldX != null && parameterValue.flatFieldY != null
+      ? { x: parameterValue.flatFieldX, y: parameterValue.flatFieldY }
+      : null;
 
   // Determine active formats
   const activeFormats = [];
@@ -391,6 +398,73 @@ const OutputDimension = () => {
       )}
 
       <Divider sx={{ my: 3 }} />
+
+      {/* Shading (flat-field) correction of the stitched image: a reference of
+          clear glass, taken at the start of the run where "Detect tissue"
+          found glass (or here), else the stored one of the objective. */}
+      <Typography variant="subtitle2" sx={{ mb: 1.5, fontWeight: 600 }}>
+        Shading Correction (flat-field)
+      </Typography>
+      <Box
+        sx={{
+          display: "flex",
+          alignItems: "flex-start",
+          p: 2,
+          mb: 3,
+          border: `1px solid ${
+            parameterValue.flatField ? theme.palette.primary.main : theme.palette.divider
+          }`,
+          borderRadius: 1,
+          backgroundColor: parameterValue.flatField
+            ? alpha(theme.palette.primary.main, 0.04)
+            : "transparent",
+        }}
+      >
+        <Switch
+          checked={Boolean(parameterValue.flatField)}
+          onChange={(e) => dispatch(experimentSlice.setFlatField(e.target.checked))}
+          sx={{ mr: 1.5, mt: -0.5 }}
+        />
+        <Box sx={{ flex: 1 }}>
+          <Typography variant="body2" sx={{ fontWeight: 600, mb: 0.5 }}>
+            Even brightness and colour across the tiles
+          </Typography>
+          <Typography variant="caption" color="textSecondary" sx={{ display: "block" }}>
+            Divides the stitched image by a reference of clear glass, so tile corners are not
+            darker and the seams carry no colour cast. For transmitted light. Individual tiles
+            stay raw; the reference is saved with the run.
+          </Typography>
+          {parameterValue.flatField && (
+            <Typography variant="caption" sx={{ display: "block", mt: 1 }}>
+              {flatFieldSpot
+                ? `Reference taken at the start of the run on clear glass at X ${Math.round(
+                    flatFieldSpot.x,
+                  )}, Y ${Math.round(flatFieldSpot.y)} µm.`
+                : "Uses the stored reference of the current objective; without one the scan is not corrected. Detect tissue sets a clear-glass spot."}
+            </Typography>
+          )}
+          {parameterValue.flatField && (
+            <Box sx={{ display: "flex", gap: 1, mt: 1, flexWrap: "wrap" }}>
+              <Button
+                size="small"
+                variant="outlined"
+                onClick={() =>
+                  dispatch(
+                    experimentSlice.setFlatFieldSpot({ x: positionState.x, y: positionState.y }),
+                  )
+                }
+              >
+                Clear glass is here
+              </Button>
+              {flatFieldSpot && (
+                <Button size="small" onClick={() => dispatch(experimentSlice.setFlatFieldSpot(null))}>
+                  Use the stored reference
+                </Button>
+              )}
+            </Box>
+          )}
+        </Box>
+      </Box>
 
       {/* Post-processing: stitching. The plain "Stitched OME-TIFF" toggle above
           composites tiles by stage coordinates on the fly; Ashlar instead runs

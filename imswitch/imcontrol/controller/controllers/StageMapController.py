@@ -14,6 +14,7 @@ from imswitch.imcommon.model import APIExport, dirtools, initLogger
 from ..basecontrollers import ImConWidgetController
 from ..busy import busy_reasons
 from imswitch.imcontrol.model.aufgaben.storage import save_image
+from imswitch.imcontrol.model import tissue_detection
 
 try:
     import cv2
@@ -44,6 +45,9 @@ class StageMapParams(BaseModel):
     # Preview (what is pushed to the frontend)
     previewMaxSize: int = 384           # longest side of the downscaled preview tile in px
     previewQuality: int = 80            # JPEG quality of preview tiles
+    # Prescan strips are previewed at this many µm per pixel instead (0 = previewMaxSize):
+    # previewMaxSize made a 27 mm line 384 px, 70 µm/px, too coarse to find small tissue.
+    prescanPreviewUm: float = 25.0
 
     # Storage
     saveRawTiles: bool = True           # store full-resolution raw frames on disk
@@ -105,6 +109,31 @@ class StageMapStatus(BaseModel):
         arbitrary_types_allowed = True
 
 
+class TissueSlide(BaseModel):
+    """One slide to look at, as the plate layout places it (stage µm)."""
+    id: str
+    name: str = ""
+    minX: float
+    maxX: float
+    minY: float
+    maxY: float
+
+
+class TissueDetectionRequest(BaseModel):
+    """What ``detectTissue`` looks for, and the fields it plans tiles with."""
+    slides: List[TissueSlide] = []      # empty: the whole prescan as one slide
+    fovX: float = 0.0                   # µm; 0 = the current camera field
+    fovY: float = 0.0
+    overlap: float = 0.1                # tile overlap of the plan (fraction)
+    marginUm: float = 400.0             # grown around the tissue before tiling
+    minAreaMm2: float = 0.5             # smaller pieces are debris
+    odThreshold: float = 0.03           # absorbance that counts as tissue (~7 % darker)
+    mergeUm: float = 3000.0             # closer pieces become one region (one image)
+    edgeUm: float = 2000.0              # border of the glass never counted as tissue
+    rejectInk: bool = True              # leave marker pen out (colour prescans)
+    includeOverview: bool = True        # return the composed overview image
+
+
 def prescanLayout(spanUm: float, dxUm: float, pixelSizeUm: float, frameShape,
                   subsample: int, maxStripBytes: int, itemsize: int = 2):
     """How one prescan line is laid out: the sample slots and the strip they fill.
@@ -149,6 +178,10 @@ def estimateProfileShift(a: np.ndarray, b: np.ndarray, maxShiftPx: Optional[int]
     """
     a = np.asarray(a, dtype=np.float64)
     b = np.asarray(b, dtype=np.float64)
+    if a.ndim == 3:   # colour strips: compare their luminance
+        a = a.mean(axis=2)
+    if b.ndim == 3:
+        b = b.mean(axis=2)
     if a.ndim == 1:
         a = a[None, :]
     if b.ndim == 1:
@@ -202,8 +235,8 @@ def spreadBands(samples, t0, t1, span, scale, forward=True):
     gap is centred and the remainder left dark rather than stretched.
     """
     stripW = max(2, int(np.ceil(span / scale)))
-    stripH = samples[0][1].shape[0]
-    strip = np.zeros((stripH, stripW), dtype=samples[0][1].dtype)
+    first = samples[0][1]
+    strip = np.zeros((first.shape[0], stripW) + first.shape[2:], dtype=first.dtype)
     duration = max(t1 - t0, 1e-6)
     placed = []
     for t, band in samples:
@@ -535,6 +568,26 @@ class _Sweep:
         self.scale = scale
         self.forward = forward
 
+    def coarse(self, factor: int) -> "_Sweep":
+        """The same sweep ``factor`` times coarser (block means), to place again later.
+
+        A full-resolution sweep is up to PRESCAN_MAX_STRIP_MB; at the preview's
+        resolution a whole prescan of them is a few tens of MB.
+        """
+        f = max(1, int(factor))
+        if f == 1:
+            return self
+
+        def shrink(band):
+            h, w = (band.shape[0] // f) * f, (band.shape[1] // f) * f
+            if h == 0 or w == 0:
+                return band[::f, ::f].copy()
+            blocks = band[:h, :w].reshape((h // f, f, w // f, f) + band.shape[2:])
+            return blocks.mean(axis=(1, 3)).astype(band.dtype)
+
+        return _Sweep([(t, shrink(band)) for t, band in self.samples], self.t0, self.t1,
+                      self.span, self.scale * f, self.forward)
+
     @property
     def speed(self) -> float:
         """Mean speed actually achieved, µm/s — not what was asked for."""
@@ -799,52 +852,51 @@ class StageMapController(ImConWidgetController):
             self._logger.info(f"Removed {len(removed)} {kind} tile(s)")
         return removed
 
-    def _makePreview(self, frame: np.ndarray) -> Optional[str]:
-        """Downscale + JPEG-encode a frame, return base64 string."""
+    @staticmethod
+    def _previewTo8bit(img: np.ndarray) -> np.ndarray:
+        """uint8 as it is; anything else stretched over its 1..99.8 percentiles."""
+        if img.dtype == np.uint8:
+            return img
+        img = img.astype(np.float32)
+        lo, hi = np.percentile(img, (1, 99.8))
+        hi = hi if hi > lo else lo + 1
+        return np.clip((img - lo) / (hi - lo) * 255.0, 0, 255).astype(np.uint8)
+
+    def _previewSize(self, img: np.ndarray, size: Optional[Tuple[int, int]]) -> Tuple[int, int]:
+        """(width, height): ``size``, or the longest side at most ``previewMaxSize``."""
+        if size is not None:
+            return max(1, int(size[0])), max(1, int(size[1]))
+        scale = min(1.0, float(self.params.previewMaxSize) / max(img.shape[0], img.shape[1]))
+        return max(1, int(img.shape[1] * scale)), max(1, int(img.shape[0] * scale))
+
+    def _makePreview(self, frame: np.ndarray,
+                     size: Optional[Tuple[int, int]] = None) -> Optional[str]:
+        """Downscale + JPEG-encode a frame, return base64 string.
+
+        ``size`` (width, height) sets the preview size; by default the longest
+        side is ``previewMaxSize``. Colour frames are RGB (as every detector
+        delivers them) and are written as such: OpenCV encodes BGR, so they
+        are swapped first, or red and blue trade places in the browser.
+        """
         try:
-            img = frame
-            if img.ndim == 3:
-                # colour camera: keep as-is (assume BGR/RGB uint8)
-                pass
-            maxSide = max(img.shape[0], img.shape[1])
-            scale = min(1.0, float(self.params.previewMaxSize) / maxSide)
-            if HAS_CV2:
-                if scale < 1.0:
-                    img = cv2.resize(
-                        img,
-                        (max(1, int(img.shape[1] * scale)), max(1, int(img.shape[0] * scale))),
-                        interpolation=cv2.INTER_AREA,
-                    )
-                # normalize to 8 bit for the preview
-                if img.dtype != np.uint8:
-                    img = img.astype(np.float32)
-                    lo, hi = np.percentile(img, (1, 99.8))
-                    if hi <= lo:
-                        hi = lo + 1
-                    img = np.clip((img - lo) / (hi - lo) * 255.0, 0, 255).astype(np.uint8)
-                ok, buf = cv2.imencode(
-                    ".jpg", img, [int(cv2.IMWRITE_JPEG_QUALITY), int(self.params.previewQuality)]
-                )
-                if not ok:
-                    return None
-                return base64.b64encode(buf.tobytes()).decode("ascii")
-            else:
-                # numpy-only fallback: subsample + PNG via tifffile is overkill; use PIL if present
+            img = frame[..., 0] if frame.ndim == 3 and frame.shape[2] == 1 else frame
+            width, height = self._previewSize(img, size)
+            quality = int(self.params.previewQuality)
+            if not HAS_CV2:   # PIL fallback: plain subsampling
                 from PIL import Image
                 import io
-                if scale < 1.0:
-                    step = max(1, int(round(1.0 / scale)))
-                    img = img[::step, ::step]
-                if img.dtype != np.uint8:
-                    img = img.astype(np.float32)
-                    lo, hi = np.percentile(img, (1, 99.8))
-                    if hi <= lo:
-                        hi = lo + 1
-                    img = np.clip((img - lo) / (hi - lo) * 255.0, 0, 255).astype(np.uint8)
-                pil = Image.fromarray(img)
+                step = max(1, int(round(img.shape[1] / width)))
                 bio = io.BytesIO()
-                pil.save(bio, format="JPEG", quality=int(self.params.previewQuality))
+                Image.fromarray(self._previewTo8bit(img[::step, ::step])).save(
+                    bio, format="JPEG", quality=quality)
                 return base64.b64encode(bio.getvalue()).decode("ascii")
+            if (width, height) != (img.shape[1], img.shape[0]):
+                img = cv2.resize(img, (width, height), interpolation=cv2.INTER_AREA)
+            img = self._previewTo8bit(img)
+            if img.ndim == 3 and img.shape[2] == 3:
+                img = cv2.cvtColor(img, cv2.COLOR_RGB2BGR)
+            ok, buf = cv2.imencode(".jpg", img, [int(cv2.IMWRITE_JPEG_QUALITY), quality])
+            return base64.b64encode(buf.tobytes()).decode("ascii") if ok else None
         except Exception as e:
             self._logger.error(f"Could not create preview: {e}")
             return None
@@ -978,6 +1030,12 @@ class StageMapController(ImConWidgetController):
             # until one has contrast (each try costs one extra backward sweep).
             # A whole prescan with the stale lag zig-zags every other strip.
             calibrationTries = 0 if lagS is None else _PRESCAN_LAG_TRIES
+            # previous: the last line as placed; estimates: lags measured between
+            # neighbouring lines. A pinned prescanLagMs is left alone.
+            loop = {"pinned": lagS is not None, "previous": None, "estimates": []}
+            # Each line at preview resolution, the lag it was placed with and its
+            # tile: lines placed before the lag settled are laid out again.
+            lines = []
             while y <= maxY + 1e-6 and not self._shouldStop.is_set():
                 if strobe is not None:
                     self._prescanStrobedLine(minX, maxX, y, forward, speedX, dx, subsample, strobe)
@@ -998,8 +1056,11 @@ class StageMapController(ImConWidgetController):
                     sweep = self._sweepLine(startX, endX, y, speedX, dx, subsample)
                     forward = not forward
                 if sweep is not None:
-                    self._addStrip(self._placeSweep(sweep, lagS), minX, maxX, y, sweep.scale)
+                    lagS = self._placeAndKeep(sweep, lagS, loop, lines, minX, maxX, y)
                 y += dy
+            self._logger.info(f"Prescan lag in use: {(lagS or 0.0) * 1000:.0f} ms, "
+                              f"{len(loop['estimates'])} measurement(s) between neighbouring lines")
+            self._placeAgain(lines, lagS, minX, maxX)
         except Exception as e:
             self._lastError = f"Prescan failed: {e}"
             self._logger.error(self._lastError)
@@ -1013,6 +1074,90 @@ class StageMapController(ImConWidgetController):
             self._prescanThread = None
             self._emitStatus()
             self._logger.info("Prescan finished")
+
+    # A line placed with a lag further than this from the settled one is laid out again.
+    PRESCAN_REPLACE_LAG_S = 0.005
+
+    def _coarseSweep(self, sweep: "_Sweep") -> Optional["_Sweep"]:
+        """``sweep`` at about the preview's resolution (None without previews)."""
+        previewUm = float(getattr(self.params, "prescanPreviewUm", 0.0) or 0.0)
+        if previewUm <= 0 or not sweep.samples:
+            return None
+        return sweep.coarse(max(1, int(previewUm / max(sweep.scale, 1e-6))))
+
+    def _placeAndKeep(self, sweep: "_Sweep", lagS, loop: Dict, lines: List, minX: float,
+                      maxX: float, y: float):
+        """Place a line on the map (closed-loop lag) and keep it coarse for _placeAgain."""
+        strip, lagS = self._placeLine(sweep, lagS, loop)
+        tileId = self._addStrip(strip, minX, maxX, y, sweep.scale)
+        if tileId is not None and not loop["pinned"]:
+            lines.append((self._coarseSweep(sweep), y, lagS, tileId))
+        return lagS
+
+    def _placeAgain(self, lines, lagS: Optional[float], minX: float, maxX: float) -> int:
+        """Lay out again the lines placed with a lag the closed loop later corrected.
+
+        Their tiles keep their ids, so the map replaces them. The first lines
+        often run on a calibration the neighbouring lines then overrule: on a
+        FRAME prescan it matched one slide's edge to the next one's (491 ms
+        where 86 ms was right) and the first 19 lines zig-zagged by +-9 mm.
+        """
+        if lagS is None or self._shouldStop.is_set():
+            return 0
+        again = [(sweep, y, tileId) for sweep, y, used, tileId in lines
+                 if sweep is not None and abs(used - lagS) > self.PRESCAN_REPLACE_LAG_S]
+        for sweep, y, tileId in again:
+            self._addStrip(self._placeSweep(sweep, lagS), minX, maxX, y, sweep.scale,
+                           replaceId=tileId)
+        if again:
+            self._logger.info(f"Prescan: {len(again)} line(s) placed again with the settled "
+                              f"lag of {lagS * 1000:.0f} ms")
+        return len(again)
+
+    def _placeLine(self, sweep: "_Sweep", lagS: float, loop: Dict) -> Tuple[np.ndarray, float]:
+        """Place a line; refine the lag against the line before it (closed loop).
+
+        A forward line next to a return line shows a lag that is still wrong as
+        a sideways offset of their touching rows. The lag used is the median of
+        the last measurements; the line is placed again when it changed.
+        """
+        strip = self._placeSweep(sweep, lagS)
+        measured = (None if loop["pinned"]
+                    else self._lagFromNeighbour(loop["previous"], strip, sweep, lagS))
+        if measured is not None:
+            loop["estimates"].append(measured)
+            refined = float(np.median(loop["estimates"][-7:]))
+            if abs(refined - lagS) > 0.002:
+                lagS = self._prescanLagS = refined
+                strip = self._placeSweep(sweep, lagS)
+        loop["previous"] = (strip, sweep.forward, sweep.speed)
+        return strip, lagS
+
+    def _lagFromNeighbour(self, previous, strip, sweep, lagS) -> Optional[float]:
+        """The lag that would line ``strip`` up with the line before it, or None.
+
+        Neighbouring lines touch in Y, so the last rows of one and the first
+        rows of the next show the same structures (slide edges, tissue
+        borders). Placed with the right lag they line up; with lag L instead
+        of L*, a forward line lands (L* - L) * v ahead and a return line as
+        much behind, so the two are (L* - L) * (vF + vB) apart. Lines driven
+        the same way say nothing about the lag.
+        """
+        if previous is None:
+            return None
+        prevStrip, prevForward, prevSpeed = previous
+        if prevForward == sweep.forward or prevStrip.shape[1] != strip.shape[1]:
+            return None
+        rows = max(2, min(8, strip.shape[0] // 4, prevStrip.shape[0] // 4))
+        speeds = max(prevSpeed + sweep.speed, 1e-6)
+        maxShiftPx = int(np.ceil(0.5 * speeds / sweep.scale))
+        shiftPx = estimateProfileShift(prevStrip[-rows:], strip[:rows],
+                                       maxShiftPx=maxShiftPx, minPeak=0.4)
+        if shiftPx is None:
+            return None
+        delta = shiftPx * sweep.scale / speeds
+        candidate = lagS + (delta if prevForward else -delta)
+        return candidate if 0.0 <= candidate <= 0.5 else None
 
     def _calibratePrescanLag(self, minX, maxX, y, speedX, dx, subsample):
         """Drive one line forward and back; the strips' offset is 2 × speed × lag.
@@ -1043,7 +1188,16 @@ class StageMapController(ImConWidgetController):
         # Forward lands +speed·lag along X, backward −speed·lag: the strips
         # are (vF + vB)·lag apart.
         lagS = shiftPx * fwd.scale / max(fwd.speed + bwd.speed, 1e-6)
-        lagS = float(min(max(lagS, -0.5), 0.5))
+        if not 0.0 <= lagS <= 0.5:
+            # A frame cannot reach us before it was exposed, nor half a second
+            # later: the correlation locked onto something periodic (the holder
+            # at a slot end does that). -62 ms here once offset every return
+            # line by 6.7 mm. Try the next line; neighbouring lines refine it.
+            self._logger.warning(
+                f"Prescan lag calibration: line y={y:.0f} gave {lagS * 1000:.0f} ms, "
+                f"not a camera lag; keeping {fallback * 1000:.0f} ms")
+            return fallback, fwd
+        lagS = float(lagS)
         self._prescanLagCalibrated = True
         self._logger.info(
             f"Prescan lag calibration: strips {shiftPx * fwd.scale:.0f} µm apart at "
@@ -1134,9 +1288,9 @@ class StageMapController(ImConWidgetController):
 
         The stage never stops, so only the middle of each frame corresponds to
         the position we recorded. Copied so the detector can reuse its buffer.
+        A colour camera's band stays colour: the tissue finder tells stain from
+        pen ink and glass edges by it (it used to keep channel 0 only).
         """
-        if frame.ndim == 3:
-            frame = frame[:, :, 0]
         width = frame.shape[1]
         band = max(1, min(width, widthPx))
         start = max(0, width // 2 - band // 2)
@@ -1181,7 +1335,8 @@ class StageMapController(ImConWidgetController):
         # coarsens the strip until it fits the memory budget.
         wanted, _, _, subsample, dx = prescanLayout(
             span, dx, pixelSize, (frameH, frameW), subsample,
-            self.PRESCAN_MAX_STRIP_MB * 1024 * 1024)
+            self.PRESCAN_MAX_STRIP_MB * 1024 * 1024,
+            probe.dtype.itemsize * (probe.shape[2] if probe.ndim == 3 else 1))
         wanted = min(self.PRESCAN_MAX_FRAMES, wanted)
         # Keep a band a little wider than the pitch, so placement can crop to
         # the real spacing without ever leaving a gap.
@@ -1586,10 +1741,11 @@ class StageMapController(ImConWidgetController):
 
         span = abs(endX - startX)
         pixelSize = self._getPixelSizeUm()
-        frameH, frameW = strobe["frameShape"]
+        frameH, frameW = strobe["frameShape"][:2]
+        # 3 bytes per pixel: a colour camera's bands stay colour (_centreBand)
         wanted, _, _, subsample, dx = prescanLayout(
             span, dx, pixelSize, (frameH, frameW), subsample,
-            self.PRESCAN_MAX_STRIP_MB * 1024 * 1024)
+            self.PRESCAN_MAX_STRIP_MB * 1024 * 1024, 3)
         wanted = min(self.PRESCAN_MAX_FRAMES, wanted)
         bandPx = min(frameW, int(np.ceil(1.25 * dx / pixelSize)))
         intervalUs = (span / max(speedX, 1e-6)) / wanted * 1e6  # nominal µs per exposure
@@ -1668,15 +1824,23 @@ class StageMapController(ImConWidgetController):
         return strip, scale
 
     def _addStrip(self, strip: np.ndarray, minX: float, maxX: float, y: float,
-                  pixelSize: float):
-        """Push one prescan line into the existing tile store as a wide tile.
+                  pixelSize: float, replaceId: Optional[int] = None) -> Optional[int]:
+        """Push one prescan line into the existing tile store as a wide tile; its id.
 
         ``pixelSize`` is the strip's own µm/px (coarser than the camera's).
+        The preview keeps ``prescanPreviewUm`` per pixel (and the colour), what
+        the tissue finder (detectTissue) works from. With ``replaceId`` the
+        tile of that id is replaced (a line laid out again).
         """
-        preview = self._makePreview(strip)
+        size = None
+        previewUm = float(getattr(self.params, "prescanPreviewUm", 0.0) or 0.0)
+        if previewUm > 0:
+            size = (max(1, int(round((maxX - minX) / previewUm))),
+                    max(1, int(round(strip.shape[0] * pixelSize / previewUm))))
+        preview = self._makePreview(strip, size)
         if preview is None:
-            return
-        tileId = self._allocTileId()
+            return None
+        tileId = replaceId if replaceId is not None else self._allocTileId()
         tile = {
             "id": tileId,
             "x": float((minX + maxX) / 2.0),
@@ -1690,14 +1854,20 @@ class StageMapController(ImConWidgetController):
             "preview": preview,
         }
         with self._tilesLock:
-            self._tiles.append(tile)
-            self._trimTiles()
+            index = (next((i for i, t in enumerate(self._tiles) if t.get("id") == replaceId),
+                          None) if replaceId is not None else None)
+            if index is not None:
+                self._tiles[index] = tile
+            else:
+                self._tiles.append(tile)
+                self._trimTiles()
         self._writeTileIndex()
         self.sigStageMapTileAdded.emit({
             "id": tileId, "x": tile["x"], "y": tile["y"],
             "widthUm": tile["widthUm"], "heightUm": tile["heightUm"],
             "channel": tile["channel"], "image": preview, "format": "jpeg",
         })
+        return tileId
 
     # ------------------------------------------------------------------ #
     # Monitor loop
@@ -2009,10 +2179,10 @@ class StageMapController(ImConWidgetController):
         umPerPixel = max(spanX / max(1, int(maxWidthPx)), self._getPixelSizeUm())
         width = max(1, int(round(spanX / umPerPixel)))
         height = max(1, int(round(spanY / umPerPixel)))
-        canvas = np.zeros((height, width), dtype=np.uint8)
+        canvas = np.zeros((height, width, 3), dtype=np.uint8)   # RGB; grey tiles fill all three
 
         for tile in tiles:
-            img = self._decodePreview(tile["preview"])
+            img = self._decodePreview(tile["preview"], colour=True)
             if img is None:
                 continue
             tw = max(1, int(round(tile["widthUm"] / umPerPixel)))
@@ -2030,8 +2200,8 @@ class StageMapController(ImConWidgetController):
         # described the full canvas - every coordinate taken from it was off ~30x.
         encoded = None
         if HAS_CV2:
-            ok, buf = cv2.imencode(".jpg", canvas, [int(cv2.IMWRITE_JPEG_QUALITY),
-                                                    int(self.params.previewQuality)])
+            ok, buf = cv2.imencode(".jpg", cv2.cvtColor(canvas, cv2.COLOR_RGB2BGR),
+                                   [int(cv2.IMWRITE_JPEG_QUALITY), int(self.params.previewQuality)])
             encoded = base64.b64encode(buf.tobytes()).decode("ascii") if ok else None
         if encoded is None:
             return {"success": False, "error": "Could not encode overview"}
@@ -2047,15 +2217,100 @@ class StageMapController(ImConWidgetController):
             "tileCount": len(tiles),
         }
 
-    def _decodePreview(self, preview: str) -> Optional[np.ndarray]:
-        """base64 JPEG -> 2-D uint8 array."""
+    def _fieldOfViewUm(self) -> Tuple[float, float]:
+        """(width, height) of the camera field in µm, from the latest frame."""
+        pixelSize = self._getPixelSizeUm()
+        try:
+            frame = self._detector.getLatestFrame()
+            if frame is not None and getattr(frame, "size", 0):
+                return frame.shape[1] * pixelSize, frame.shape[0] * pixelSize
+        except Exception:
+            pass
+        try:
+            shape = self._detector.shape   # (width, height) for most managers
+            return float(shape[0]) * pixelSize, float(shape[1]) * pixelSize
+        except Exception:
+            return 1000.0, 1000.0
+
+    @APIExport(requestType="POST")
+    def detectTissue(self, request: TissueDetectionRequest) -> Dict:
+        """Find the tissue on the prescanned slides and plan the tiles that cover it.
+
+        Works on the prescan strips already on the map (``startPrescan``); it
+        moves nothing. Per slide (stage µm, rectangles from the plate layout):
+        ``regions`` (tissue pieces closer than ``mergeUm`` form one region =
+        one image: ``outlines``, ``areaMm2``, ``bounds``, serpentine ``tiles``
+        for the given field and overlap), ``ink`` (marker pen, colour
+        prescans only, not scanned), ``blank`` (clear glass for the flat-field
+        reference: x, y, clearanceUm) and ``warnings``. ``overview`` is the
+        composed prescan (base64 JPEG, ``bounds``, ``umPerPixel``).
+
+        Colour prescans tell stain from pen ink and glass edges; grey ones
+        cannot, so pen marks are then found as tissue.
+        """
+        with self._tilesLock:
+            prescan = [dict(t) for t in self._tiles
+                       if t.get("kind") == "prescan" and t.get("preview")]
+        if not prescan:
+            return {"success": False,
+                    "error": "No prescan on the map yet: run a prescan of the slides first."}
+        strips = []
+        for tile in prescan:
+            img = self._decodePreview(tile["preview"], colour=True)
+            if img is None:
+                continue
+            if img.ndim == 3 and np.array_equal(img[..., 0], img[..., 1]) and \
+                    np.array_equal(img[..., 1], img[..., 2]):
+                img = img[..., 0]          # a grey strip, decoded as colour
+            strips.append(tissue_detection.Strip(img, tile["x"], tile["y"],
+                                                 tile["widthUm"], tile["heightUm"]))
+        if not strips:
+            return {"success": False, "error": "The prescan previews could not be read."}
+        params = tissue_detection.TissueParams(
+            od_threshold=request.odThreshold, edge_um=request.edgeUm,
+            min_area_mm2=request.minAreaMm2, margin_um=request.marginUm,
+            merge_um=request.mergeUm, reject_ink=request.rejectInk)
+        overview = tissue_detection.compose(strips, upp=params.upp)
+        fovX, fovY = self._fieldOfViewUm()
+        fov = (request.fovX or fovX, request.fovY or fovY)
+        slides = request.slides or [TissueSlide(id="map", name="Prescan", **overview.bounds)]
+        results = []
+        for slide in slides:
+            rect = {"minX": slide.minX, "maxX": slide.maxX, "minY": slide.minY, "maxY": slide.maxY}
+            try:
+                found = tissue_detection.detect_slide(overview, rect, fov, request.overlap, params)
+            except Exception as e:
+                self._logger.error(f"Tissue detection failed on {slide.id}: {e}")
+                found = {"regions": [], "ink": [], "blank": None, "tissueMm2": 0.0,
+                         "tileCount": 0, "warnings": [f"Detection failed: {e}"]}
+            results.append({"id": slide.id, "name": slide.name or slide.id, **found})
+        summary = ", ".join(f"{r['name']}: {len(r['regions'])} region(s), {r['tissueMm2']} mm², "
+                            f"{r['tileCount']} tiles" for r in results)
+        kind = "colour" if overview.colour else "grey"
+        self._logger.info(f"Tissue detection ({kind} prescan): {summary}")
+        out = {"success": True, "colour": overview.colour, "slides": results,
+               "fov": {"x": fov[0], "y": fov[1]}, "overlap": request.overlap,
+               "prescanRunning": self._prescanThread is not None}
+        if request.includeOverview:
+            jpeg = overview.jpeg(int(self.params.previewQuality))
+            if jpeg is not None:
+                out["overview"] = {"image": base64.b64encode(jpeg).decode("ascii"),
+                                   "format": "jpeg", "bounds": overview.bounds,
+                                   "umPerPixel": overview.upp}
+        return out
+
+    def _decodePreview(self, preview: str, colour: bool = False) -> Optional[np.ndarray]:
+        """base64 JPEG -> uint8 array: 2-D, or RGB (H, W, 3) with ``colour``."""
         try:
             raw = base64.b64decode(preview)
             if HAS_CV2:
+                if colour:
+                    img = cv2.imdecode(np.frombuffer(raw, np.uint8), cv2.IMREAD_COLOR)
+                    return None if img is None else cv2.cvtColor(img, cv2.COLOR_BGR2RGB)
                 return cv2.imdecode(np.frombuffer(raw, np.uint8), cv2.IMREAD_GRAYSCALE)
             from PIL import Image
             import io
-            return np.array(Image.open(io.BytesIO(raw)).convert("L"))
+            return np.array(Image.open(io.BytesIO(raw)).convert("RGB" if colour else "L"))
         except Exception as e:
             self._logger.debug(f"Could not decode tile preview: {e}")
             return None

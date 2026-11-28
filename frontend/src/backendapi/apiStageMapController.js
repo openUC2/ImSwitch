@@ -93,3 +93,13 @@ export const apiStageMapGetOverview = (maxWidthPx = 2048) =>
 
 export const apiStageMapSaveOmeTiff = (filename = "") =>
   get("saveStitchedOmeTiff", { filename });
+
+// Tissue on the prescanned slides: per slide (stage-µm rectangles from the
+// plate layout) the tissue regions with their outlines, tile plan and focus
+// points, marker-pen ink, and a blank-glass spot for the flat-field. Moves
+// nothing; needs a prescan on the map first.
+export const apiStageMapDetectTissue = async (request) => {
+  const axiosInstance = createAxiosInstance();
+  const response = await axiosInstance.post("/StageMapController/detectTissue", request);
+  return response.data;
+};

@@ -645,6 +645,11 @@ class ExperimentInfo:
     ExperimentController will look for a detector named ``"overviewcamera"``
     and otherwise leave the overview feature disabled. """
 
+    scanSpeedXY: Optional[float] = None
+    """ XY stage speed of scans and prescans that do not set their own, in the
+    stage's speed units (UC2/ESP32: firmware steps/s; 80000 = 25 mm/s at
+    0.3125 µm/step). ``None``: 20000. Set it to what this stage was tested at. """
+
 
 @dataclass(frozen=False)
 class ISMInfo:

@@ -112,6 +112,11 @@ ignores every flag. It then starts the user's default setup from
 `~/ImSwitchConfig/config/imcontrol_options.json` against real hardware. There is no `--headless` flag;
 the server is always headless.
 
+ImSwitch exits (code 1) before opening any hardware when its HTTP port is already in use: a second
+instance next to a running one used to open the board's serial port anyway, fail to bind, and keep
+talking to the board without an API. To restart, stop the Python process itself; `arch -x86_64 …`
+or `uv run …` launchers can exit while their child keeps running.
+
 Flags (`imswitch/__main__.py`):
 
 | Flag | Meaning |
@@ -460,7 +465,16 @@ Running:
 - `startFastStageScanAcquisition(xstart, xstep, nx, ystart, ystep, ny, zstart, …)` /
   `stopFastStageScanAcquisition` / `startFastStageScanAcquisitionFilePath` — firmware-timed,
   fastest path
-- `getLastScanAsOMEZARR()`
+- `getLastScanAsOMEZARR()`; `getExperimentRuns(limit)` — recent runs with their images (paths
+  below the data folder), tile count, flat-field and timing
+- Flat-field (shading) reference (`model/flatfield.py`, `docs/SLIDE_SCANNER.md`):
+  `captureFlatField(request{x, y, frames, spacingUm, illumination, intensity, …})` (POST) —
+  **moves the stage** on a small grid on blank glass and switches the light on;
+  `getFlatFieldStatus`, `deleteFlatField(key)`. A run with `parameterValue.flatField` divides the
+  stitched image (not the individual tiles) by the reference of its objective and light, or by
+  a fresh one taken at `flatFieldX/Y` first; the reference goes into the run folder
+- `parameterValue.speed = 0` uses the setup's `experiment.scanSpeedXY` (the stage's tested
+  speed, stage units; 20000 without it)
 
 useq-schema MDA:
 
@@ -548,7 +562,12 @@ prescan and firmware stage scans, digital I/O, temperature; plan and format in
   isBlocking)`, `saveStitchedOmeTiff(filename)`
 - `startPrescan(minX, maxX, minY, maxY, dy, speedX, …)` (POST) / `stopPrescan` — fast
   low-resolution sweep; refused, like `startStageMap`, while an experiment, job, recording or
-  calibration runs (`controller/busy.py`)
+  calibration runs (`controller/busy.py`). Colour cameras give colour strips
+- `detectTissue(request{slides, overlap, odThreshold, rejectInk, …})` (POST) — tissue on the
+  prescanned slides (`model/tissue_detection.py`): per slide regions (outlines, tiles, focus
+  points, `scanPolygon`, stage µm), pen ink (colour only) and a clear-glass spot; moves
+  nothing. The WellPlate "Detect tissue" button turns regions into freehand scan areas
+  (`docs/SLIDE_SCANNER.md`)
 
 ### 4.10 Metadata, storage and files
 
